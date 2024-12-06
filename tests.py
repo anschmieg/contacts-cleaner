@@ -1,12 +1,35 @@
+import logging
+from pathlib import Path
 from collections import defaultdict
-from process_contact import merge_names, are_phones_matching, is_duplicate_with_confidence
+from process_contact import (merge_names, are_phones_matching, is_duplicate_with_confidence)
 
+# --- Logging Configuration ---
+output_dir = Path("output")
+output_dir.mkdir(exist_ok=True)
+log_file = output_dir / "test_results.log"
 
-###################
-# Testing Functions
-###################
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s - [%(levelname)s] - %(filename)s:%(lineno)d - %(funcName)s()\n    %(message)s")
+)
 
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)
+console_handler.setFormatter(logging.Formatter("%(message)s"))
 
+RESULTS_LEVEL = logging.ERROR
+logging.addLevelName(RESULTS_LEVEL, "RESULTS")
+
+def log_results(self, message, *args, **kwargs):
+    if self.isEnabledFor(RESULTS_LEVEL):
+        self._log(RESULTS_LEVEL, message, args, **kwargs)
+
+logging.Logger.results = log_results
+logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler], force=True)
+logger = logging.getLogger(__name__)
+
+# --- Test Cases ---
 def generate_test_cases():
     """Generate comprehensive test cases for contact matching"""
     test_pairs = [
@@ -111,19 +134,14 @@ def generate_test_cases():
     ]
     return test_pairs
 
-
+# --- Evaluation Functions ---
 def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
     """Enhanced evaluation with detailed metrics and failure analysis"""
     results = {
-        "metrics": {
-            "true_positives": 0,
-            "true_negatives": 0,
-            "false_positives": 0,
-            "false_negatives": 0,
-        },
+        "metrics": {"true_positives": 0, "true_negatives": 0, "false_positives": 0, "false_negatives": 0},
         "failures": [],
         "categories": defaultdict(lambda: {"correct": 0, "total": 0}),
-        "confidence_distribution": defaultdict(list),
+        "confidence_distribution": defaultdict(list)
     }
 
     for test in test_cases:
@@ -202,7 +220,6 @@ def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
 
     return results
 
-
 def generate_threshold_recommendations(results):
     """Generate recommendations for threshold adjustments"""
     recommendations = []
@@ -230,7 +247,6 @@ def generate_threshold_recommendations(results):
 
     return recommendations
 
-
 def grid_search():
     """Find optimal ratio values"""
     test_cases = generate_test_cases()
@@ -253,89 +269,232 @@ def grid_search():
 
     return best_ratios, best_score
 
-
 def test_ratio_optimization():
     best_ratios, score = grid_search()
-    print(f"Optimal ratios found (F1={score:.2f}):")
-    print(f"ratio_name_match = {best_ratios['name']}")
-    print(f"ratio_nickname_match = {best_ratios['nickname']}")
-    print(f"ratio_name_org_match = {best_ratios['org']}")
+    logger.info(f"Optimal ratios found (F1={score:.2f}):")
+    logger.info(f"ratio_name_match = {best_ratios['name']}")
+    logger.info(f"ratio_nickname_match = {best_ratios['nickname']}")
+    logger.info(f"ratio_name_org_match = {best_ratios['org']}")
 
+# --- Test Classes ---
+class TestFailureException(Exception):
+    """Custom exception for test failures"""
+    pass
 
+# --- Test Functions ---
 def test_merge_names():
-    # Test 1: Name variants (preferring longer forms)
-    result = merge_names("John Smith", "Johnny Smith")
-    print(f"Test 1: {result}")
-    assert result == "Johnny Smith"
+    try:
+        logger.debug("TEST SUITE: NAME MERGE")
+        tests_run = tests_passed = 0
 
-    # Test 2: Hyphenated names and ordering
-    result = merge_names("George Depression NoCorp", "George Winter-Depression")
-    print(f"Test 2: {result}")
-    assert result == "George Winter-Depression NoCorp"
+        # Test 1: Name variants
+        logger.debug("\tTEST 1/7: Name variants")
+        logger.debug("\tInput: 'John Smith' + 'Johnny Smith'")
+        result = merge_names("John Smith", "Johnny Smith")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "Johnny Smith":
+            raise TestFailureException(f"Name variant test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 3: Formal names with titles
-    result = merge_names("Dr. James Wilson", "Jim Wilson MD")
-    print(f"Test 3: {result}")
-    assert result == "Dr. Jim James Wilson MD"
+        # Test 2: Hyphenated names
+        logger.debug("\tTEST 2/7: Hyphenated names")
+        logger.debug("\tInput: 'George Depression NoCorp' + 'George Winter-Depression'")
+        result = merge_names("George Depression NoCorp", "George Winter-Depression")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "George Winter-Depression NoCorp":
+            raise TestFailureException(f"Hyphenated name test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 4: Mixed case and spacing
-    result = merge_names("mary-jane smith", "Mary Jane Smith-Jones")
-    print(f"Test 4: {result}")
-    assert result == "Mary-Jane Smith-Jones"
+        # Test 3: Formal names with titles
+        logger.debug("\tTEST 3/7: Formal names with titles")
+        logger.debug("\tInput: 'Dr. James Wilson' + 'Jim Wilson MD'")
+        result = merge_names("Dr. James Wilson", "Jim Wilson MD")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "Dr. Jim James Wilson MD":
+            raise TestFailureException(f"Formal name test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 5: Complex multi-part names
-    result = merge_names("William Henry Gates III", "Bill Gates")
-    print(f"Test 5: {result}")
-    assert result == "William Bill Henry Gates III"
+        # Test 4: Mixed case and spacing
+        logger.debug("\tTEST 4/7: Mixed case and spacing")
+        logger.debug("\tInput: 'mary-jane smith' + 'Mary Jane Smith-Jones'")
+        result = merge_names("mary-jane smith", "Mary Jane Smith-Jones")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "Mary-Jane Smith-Jones":
+            raise TestFailureException(f"Mixed case test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 6: Names with middle initials
-    result = merge_names("Robert J. Smith", "Bob Smith Jr.")
-    print(f"Test 6: {result}")
-    assert result == "Robert Bob J. Smith Jr."
+        # Test 5: Complex multi-part names
+        logger.debug("\tTEST 5/7: Complex multi-part names")
+        logger.debug("\tInput: 'William Henry Gates III' + 'Bill Gates'")
+        result = merge_names("William Henry Gates III", "Bill Gates")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "William Bill Henry Gates III":
+            raise TestFailureException(f"Complex name test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 7: Different ordering but same components
-    result = merge_names("Smith, John A.", "John Adam Smith")
-    print(f"Test 7: {result}")
-    assert result == "John A. Adam Smith"
+        # Test 6: Names with middle initials
+        logger.debug("\tTEST 6/7: Names with middle initials")
+        logger.debug("\tInput: 'Robert J. Smith' + 'Bob Smith Jr.'")
+        result = merge_names("Robert J. Smith", "Bob Smith Jr.")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "Robert Bob J. Smith Jr.":
+            raise TestFailureException(f"Middle initial test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    print("All tests passed!")
+        # Test 7: Different ordering but same components
+        logger.debug("\tTEST 7/7: Different ordering")
+        logger.debug("\tInput: 'Smith, John A.' + 'John Adam Smith'")
+        result = merge_names("Smith, John A.", "John Adam Smith")
+        logger.debug(f"\tOutput: '{result}'")
+        if result != "John A. Adam Smith":
+            raise TestFailureException(f"Ordering test failed. Got: {result}")
+        tests_run += 1
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
+        success_rate = (tests_passed / tests_run) * 100
+        logger.results(f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)")
+        return True
+    except Exception:
+        logger.error("Name merge tests failed", exc_info=True)
+        raise
 
 def test_phone_matching():
-    # Test 1: Exact match
-    assert are_phones_matching("+1-800-555-5555", "+1-800-555-5555")
-    print("Test 1 passed")
+    try:
+        logger.debug("TEST SUITE: PHONE MATCHING")
+        tests_run = tests_passed = 0
 
-    # Test 2: Different formats, same number
-    assert are_phones_matching("800-555-5555", "+1 800 555 5555")
-    print("Test 2 passed")
+        # Test 1: Exact match
+        logger.debug("\tTEST 1/9: Exact phone match")
+        logger.debug("\tInput: '+1-800-555-5555' vs '+1-800-555-5555'")
+        result = are_phones_matching("+1-800-555-5555", "+1-800-555-5555")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if not result:
+            raise TestFailureException("Exact phone match test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 3: International format vs local format
-    assert are_phones_matching("+44 20 7946 0958", "020 7946 0958")
-    print("Test 3 passed")
+        # Test 2: Different formats
+        logger.debug("\tTEST 2/9: Different formats")
+        logger.debug("\tInput: '800-555-5555' vs '+1 800 555 5555'")
+        result = are_phones_matching("800-555-5555", "+1 800 555 5555")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if not result:
+            raise TestFailureException("Phone format test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 4: Different country codes
-    assert not are_phones_matching("+1-800-555-5555", "+44 800 555 5555")
-    print("Test 4 passed")
+        # Test 3: International format vs local format
+        logger.debug("\tTEST 3/9: International format vs local format")
+        logger.debug("\tInput: '+44 20 7946 0958' vs '020 7946 0958'")
+        result = are_phones_matching("+44 20 7946 0958", "020 7946 0958")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if not result:
+            raise TestFailureException("International format test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 5: Number with symbols
-    assert are_phones_matching("(800) 555-5555", "+1 800.555.5555")
-    print("Test 5 passed")
+        # Test 4: Different country codes
+        logger.debug("\tTEST 4/9: Different country codes")
+        logger.debug("\tInput: '+1-800-555-5555' vs '+44 800 555 5555'")
+        result = are_phones_matching("+1-800-555-5555", "+44 800 555 5555")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if result:
+            raise TestFailureException("Country code test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 6: Number with extension
-    assert are_phones_matching("+1-800-555-5555 ext. 123", "+1 800 555 5555 x123")
-    print("Test 6 passed")
+        # Test 5: Number with symbols
+        logger.debug("\tTEST 5/9: Number with symbols")
+        logger.debug("\tInput: '(800) 555-5555' vs '+1 800.555.5555'")
+        result = are_phones_matching("(800) 555-5555", "+1 800.555.5555")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if not result:
+            raise TestFailureException("Symbol test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 7: Different numbers
-    assert not are_phones_matching("+1-800-555-5555", "+1-800-555-5556")
-    print("Test 7 passed")
+        # Test 6: Number with extension
+        logger.debug("\tTEST 6/9: Number with extension")
+        logger.debug("\tInput: '+1-800-555-5555 ext. 123' vs '+1 800 555 5555 x123'")
+        result = are_phones_matching("+1-800-555-5555 ext. 123", "+1 800 555 5555 x123")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if not result:
+            raise TestFailureException("Extension test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 8: Empty numbers
-    assert not are_phones_matching("", "+1-800-555-5555")
-    print("Test 8 passed")
+        # Test 7: Different numbers
+        logger.debug("\tTEST 7/9: Different numbers")
+        logger.debug("\tInput: '+1-800-555-5555' vs '+1-800-555-5556'")
+        result = are_phones_matching("+1-800-555-5555", "+1-800-555-5556")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if result:
+            raise TestFailureException("Different number test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    # Test 9: Both numbers empty
-    assert not are_phones_matching("", "")
-    print("Test 9 passed")
+        # Test 8: Empty numbers
+        logger.debug("\tTEST 8/9: Empty numbers")
+        logger.debug("\tInput: '' vs '+1-800-555-5555'")
+        result = are_phones_matching("", "+1-800-555-5555")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if are_phones_matching("", "+1-800-555-5555"):  # This test is correct
+            raise TestFailureException("Empty number test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
 
-    print("All phone matching tests passed!")
+        # Test 9: Both numbers empty
+        logger.debug("\tTEST 9/9: Both numbers empty")
+        logger.debug("\tInput: '' vs ''")
+        result = are_phones_matching("", "")
+        logger.debug(f"\tResult: {result}")
+        tests_run += 1
+        if result:  # Changed: empty strings should not match
+            raise TestFailureException("Both empty test failed")
+        tests_passed += 1
+        logger.debug("\tStatus: PASSED")
+
+        success_rate = (tests_passed / tests_run) * 100
+        logger.results(f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)")
+        return True
+    except Exception:
+        logger.error("Phone matching tests failed", exc_info=True)
+        raise
+
+def run_tests():
+    """Run all test suites and return overall test status"""
+    try:
+        logger.debug("STARTING TEST SUITES")
+        test_merge_names()
+        test_phone_matching()
+        logger.results("ALL TEST SUITES COMPLETED")
+        return True
+    except TestFailureException:
+        logger.error("Test suite failed", exc_info=True)
+        return False
+    except Exception:
+        logger.error("Unexpected test failure", exc_info=True)
+        return False
+    finally:
+        logger.results("-" * 60)

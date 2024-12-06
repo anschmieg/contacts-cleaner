@@ -2,15 +2,23 @@
 # Contact Processing
 ###################
 
+import os
+from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from math import prod
 from config import ratio_name_match, ratio_name_org_match
+from process_address import normalize_address, AddressValidationMode
 from process_name import get_contact_name, merge_names
 from process_phone import (
     any_phones_match,
     are_phones_matching,
     normalize_phone_list,
 )
+
+
+# Load environment variables from .env file
+load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
 
 
 def create_contact_index(contacts):
@@ -50,7 +58,7 @@ def extract_name_variants(contact):
     return variants
 
 
-def merge_contact_group(duplicates):
+def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
     """Modified contact merging to combine names when phones match but names don't"""
     # print(f"\nMerging contact group with {len(duplicates)} contacts:")
     # for d in duplicates:
@@ -82,6 +90,40 @@ def merge_contact_group(duplicates):
                             existing_phones.append(new_phone)
 
                     merged_contact[key] = ", ".join(existing_phones)
+                elif key == "Address":
+                    # Handle vCard address format
+                    if key in merged_contact:
+                        existing_addr = merged_contact[key]
+                        new_addr = normalize_address(value, api_key, validation_mode)
+                        if existing_addr.get("formatted") != new_addr.get("formatted"):
+                            # Merge addresses if different
+                            merged_addr = {
+                                "formatted": f"{existing_addr.get('formatted')}, {new_addr.get('formatted')}".strip(
+                                    ", "
+                                ),
+                                "vcard": [
+                                    # Combine non-empty values or keep existing
+                                    a or b
+                                    for a, b in zip(
+                                        existing_addr["vcard"], new_addr["vcard"]
+                                    )
+                                ],
+                                "metadata": {
+                                    "isBusiness": existing_addr["metadata"][
+                                        "isBusiness"
+                                    ]
+                                    or new_addr["metadata"]["isBusiness"],
+                                    "addressComplete": existing_addr["metadata"][
+                                        "addressComplete"
+                                    ]
+                                    and new_addr["metadata"]["addressComplete"],
+                                },
+                            }
+                            merged_contact[key] = merged_addr
+                    else:
+                        merged_contact[key] = normalize_address(
+                            value, api_key, validation_mode
+                        )
                 elif key in ["Full Name", "Structured Name", "Name"]:
                     # Always merge names for phone-matched contacts
                     if key in merged_contact:
@@ -104,7 +146,12 @@ def merge_contact_group(duplicates):
                     if key in ["Full Name", "Structured Name", "Name"]:
                         merged_contact[key] = merge_names(merged_contact[key], value)
             else:
-                merged_contact[key] = value
+                if key == "Address":
+                    merged_contact[key] = normalize_address(
+                        value, api_key, validation_mode
+                    )
+                else:
+                    merged_contact[key] = value
 
         # Collect confidence scores for the merged contact
         match_details = is_duplicate_with_confidence(duplicates[0], duplicate)
@@ -119,7 +166,9 @@ def merge_contact_group(duplicates):
     return merged_contact
 
 
-def merge_duplicates(contacts: list) -> list:
+def merge_duplicates(
+    contacts: list, validation_mode=AddressValidationMode.FULL
+) -> list:
     """Optimized duplicate detection and merging"""
     if not contacts:
         return []
@@ -176,7 +225,7 @@ def merge_duplicates(contacts: list) -> list:
 
     # Add merged groups
     for group in merged_groups:
-        result.append(merge_contact_group(group))
+        result.append(merge_contact_group(group, validation_mode))
 
     # Add non-duplicate contacts
     for contact in contacts:

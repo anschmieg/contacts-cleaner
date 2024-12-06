@@ -4,13 +4,14 @@
 
 
 import os
-import sys
+import argparse
 from file_io import parse_vcard, save_to_csv
 from process_contact import merge_duplicates
 from validation import generate_merge_validation
+from process_address import AddressValidationMode
 
 
-def main(input_paths):
+def main(input_paths, validation_mode=AddressValidationMode.FULL):
     all_contacts = []
     total_contacts = 0
     for input_path in input_paths:
@@ -35,7 +36,7 @@ def main(input_paths):
     original_contacts = all_contacts.copy()
 
     # Merge contacts
-    all_contacts = merge_duplicates(all_contacts)
+    all_contacts = merge_duplicates(all_contacts, validation_mode=validation_mode)
 
     # Save merged contacts
     output_csv = "output/merged_contacts.csv"
@@ -47,33 +48,26 @@ def main(input_paths):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(
-            "Usage: python main.py <input_directory_or_file> [<input_directory_or_file> ...] [-t|--test]"
-        )
-    elif sys.argv[1] in ["-t", "--test"]:
-        # Import test functions and run them
-        from tests import test_merge_names, test_phone_matching
-
-        test_merge_names = test_merge_names()
-        test_phone_matching = test_phone_matching()
-        (
-            print("--     Test Names failed!    --")
-            if not test_merge_names
-            else print("       Test Names passed!      ")
-        )
-        (
-            print("--     Test Phones failed!   --")
-            if not test_phone_matching
-            else print("       Test Phones passed!     ")
-        )
-        if test_merge_names and test_phone_matching:
-            print("-----> All tests passed! <-----")
-        elif test_merge_names and not test_phone_matching:
-            print("--     Test Names passed!    --")
-        elif not test_merge_names and test_phone_matching:
-            print("--     Test Phones passed!   --")
-        else:
-            print("-----> All tests failed! <-----")
+    parser = argparse.ArgumentParser(description='Process vCard files and clean addresses.')
+    parser.add_argument('inputs', nargs='*', help='Input directory or file paths')
+    parser.add_argument('-t', '--test', action='store_true', help='Run tests')
+    parser.add_argument('--address-cleaning', '-a', 
+                      choices=['none', 'clean', 'full'],
+                      default='full',
+                      help='Address validation mode (none: no cleaning, clean: string cleaning only, full: cleaning and API validation)')
+    
+    args = parser.parse_args()
+    
+    if args.test:
+        from tests import run_tests
+        run_tests()
+    elif not args.inputs:
+        parser.print_help()
     else:
-        main(sys.argv[1:])
+        validation_modes = {
+            'none': AddressValidationMode.NONE,
+            'clean': AddressValidationMode.CLEAN_ONLY,
+            'full': AddressValidationMode.FULL
+        }
+        validation_mode = validation_modes[args.address_validation]
+        main(args.inputs, validation_mode)
