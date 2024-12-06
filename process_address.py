@@ -22,38 +22,19 @@ logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-abbreviations = {
-    r"\bst\b": "street",
-    r"\bave\b": "avenue",
-    r"\bblvd\b": "boulevard",
-    r"\brd\b": "road",
-    r"\bapt\b": "apartment",
-    r"\bstr\b": "straße",
-    r"\bpl\b": "platz",
-    r"\bweg\b": "way",
-    r"\bgasse\b": "alley",
-    r"\bhof\b": "court",
-}
-
 
 def format_vcard_address(components):
     """Format address components according to vCard 3.0 standard"""
     # vCard 3.0 format: PO Box;Extended Address;Street;Locality;Region;Postal Code;Country
     return {
-        'formatted': components.get('street', ''),  # For display/legacy support
-        'vcard': [
-            '',  # PO Box
-            '',  # Extended Address
-            components.get('street', ''),  # Street
-            components.get('city', ''),    # Locality
-            '',  # Region
-            components.get('postal_code', ''),  # Postal Code
-            components.get('country', '')  # Country
-        ],
-        'metadata': {
-            'isBusiness': components.get('isBusiness', False),
-            'addressComplete': components.get('addressComplete', False)
-        }
+        "vcard": {
+            "street": components.get("street", ""),  # Street
+            "locality": components.get("city", ""),  # Locality
+            "postal_code": components.get("postal_code", ""),  # Postal Code
+            "country": components.get("country", ""),  # Country
+        },
+        "isBusiness": components.get("isBusiness", False),
+        "addressComplete": components.get("addressComplete", False),
     }
 
 
@@ -64,8 +45,6 @@ def normalize_address(address, api_key, validation_mode=AddressValidationMode.FU
     if validation_mode == AddressValidationMode.NONE:
         return format_vcard_address({"street": address})
 
-    logging.debug(f"Original address: {address}")
-
     # Process string cleaning if mode is CLEAN_ONLY or FULL
     if validation_mode in [
         AddressValidationMode.CLEAN_ONLY,
@@ -75,11 +54,6 @@ def normalize_address(address, api_key, validation_mode=AddressValidationMode.FU
         address = re.sub(r"\s+", " ", address).strip()
         logging.debug(f"Address after removing duplicate spaces: {address}")
 
-        # Standardize common abbreviations
-        for abbr, full in abbreviations.items():
-            address = re.sub(abbr, full, address)
-        logging.debug(f"Address after standardizing abbreviations: {address}")
-
         # Simplify address format
         address = re.sub(r"\n", ", ", address)
         address = re.sub(r",\s*,", ",", address)
@@ -87,20 +61,20 @@ def normalize_address(address, api_key, validation_mode=AddressValidationMode.FU
         address = re.sub(r"[^\w\s,]", "", address)  # Remove special characters
         logging.debug(f"Simplified address: {address}")
 
-        # Remove empty parts
-        address_parts = address.split(", ")
-        address_parts = [part for part in address_parts if part]
-        # Remove duplicate parts while preserving street numbers
-        unique_parts = []
-        seen_parts = set()
-        for part in address_parts:
-            if re.search(r"\d", part) or part not in seen_parts:
-                unique_parts.append(part)
-                seen_parts.add(part)
-        address = ", ".join(unique_parts)
-        logging.debug(
-            f"Address after removing duplicates while preserving street numbers: {address}"
-        )
+        # # Remove empty parts
+        # address_parts = address.split(", ")
+        # address_parts = [part for part in address_parts if part]
+        # # Remove duplicate parts while preserving street numbers
+        # unique_parts = []
+        # seen_parts = set()
+        # for part in address_parts:
+        #     if re.search(r"\d", part) or part not in seen_parts:
+        #         unique_parts.append(part)
+        #         seen_parts.add(part)
+        # address = ", ".join(unique_parts)
+        # logging.debug(
+        #     f"Address after removing duplicates while preserving street numbers: {address}"
+        # )
 
     if validation_mode == AddressValidationMode.CLEAN_ONLY:
         return format_vcard_address({"street": address})
@@ -118,6 +92,7 @@ def normalize_address(address, api_key, validation_mode=AddressValidationMode.FU
         "country": "",
         "isBusiness": validation_result.get("isBusiness", False),
         "addressComplete": validation_result.get("addressComplete", False),
+        "verdict": validation_result.get("verdict", "unknown"),  # Add verdict information
     }
 
     address_components = validation_result.get("addressComponents", [])
@@ -169,28 +144,8 @@ def validate_address(address, api_key):
                     "addressComponents", []
                 ),
                 "isBusiness": result.get("metadata", {}).get("business", False),
+                "verdict": result.get("verdict", {}).get("validationGranularity", "unknown"),  # Add verdict granularity
             }
     except Exception as e:
         logging.error(f"Address validation error: {e}")
     return None
-
-
-# Example addresses
-addresses = [
-    "Bergstraße 51\nBerlin,  12169\nDeutschland, 51 Bergstraße\nBerlin",
-    # "Eichhörnchensteig 3\nBerlin,  14195\nDeutschland, 3 Eichhörnchensteig\nBerlin",
-    # ":::7 Willdenowstr.:::\nBerlin, ::: 13353\n:::",
-    # "35 Föhrenstr Eggstätt 83125 ,",
-    # "Schützallee 35 Berlin,  14169 Germany, 35 Schützallee Berlin",
-    # "Albrecht-Dürer-Straße 10 Lampertheim,  68623 Deutschland, 10 Albrecht-Dürer-Straße Lampertheim",
-]
-
-
-# # Examples of different validation modes
-# no_validation = [normalize_address(addr, api_key, AddressValidationMode.NONE) for addr in addresses]
-# clean_only = [normalize_address(addr, api_key, AddressValidationMode.CLEAN_ONLY) for addr in addresses]
-# full_validation = [normalize_address(addr, api_key, AddressValidationMode.FULL) for addr in addresses]
-
-# # Print normalized addresses
-# for address in full_validation:
-#     print(address)

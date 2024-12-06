@@ -1,7 +1,18 @@
 import logging
-from pathlib import Path
+import os
+from dotenv import load_dotenv
 from collections import defaultdict
-from process_contact import (merge_names, are_phones_matching, is_duplicate_with_confidence)
+from pathlib import Path
+from process_contact import (
+    merge_names,
+    are_phones_matching,
+    is_duplicate_with_confidence,
+)
+from process_address import normalize_address, AddressValidationMode
+
+# Load environment variables
+load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
 
 # --- Logging Configuration ---
 output_dir = Path("output")
@@ -11,7 +22,9 @@ log_file = output_dir / "test_results.log"
 file_handler = logging.FileHandler(log_file)
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(
-    logging.Formatter("%(asctime)s - [%(levelname)s] - %(filename)s:%(lineno)d - %(funcName)s()\n    %(message)s")
+    logging.Formatter(
+        "%(asctime)s - [%(levelname)s] - %(filename)s:%(lineno)d - %(funcName)s()\n    %(message)s"
+    )
 )
 
 console_handler = logging.StreamHandler()
@@ -21,13 +34,18 @@ console_handler.setFormatter(logging.Formatter("%(message)s"))
 RESULTS_LEVEL = logging.ERROR
 logging.addLevelName(RESULTS_LEVEL, "RESULTS")
 
+
 def log_results(self, message, *args, **kwargs):
     if self.isEnabledFor(RESULTS_LEVEL):
         self._log(RESULTS_LEVEL, message, args, **kwargs)
 
+
 logging.Logger.results = log_results
-logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler], force=True)
+logging.basicConfig(
+    level=logging.DEBUG, handlers=[file_handler, console_handler], force=True
+)
 logger = logging.getLogger(__name__)
+
 
 # --- Test Cases ---
 def generate_test_cases():
@@ -134,14 +152,20 @@ def generate_test_cases():
     ]
     return test_pairs
 
+
 # --- Evaluation Functions ---
 def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
     """Enhanced evaluation with detailed metrics and failure analysis"""
     results = {
-        "metrics": {"true_positives": 0, "true_negatives": 0, "false_positives": 0, "false_negatives": 0},
+        "metrics": {
+            "true_positives": 0,
+            "true_negatives": 0,
+            "false_positives": 0,
+            "false_negatives": 0,
+        },
         "failures": [],
         "categories": defaultdict(lambda: {"correct": 0, "total": 0}),
-        "confidence_distribution": defaultdict(list)
+        "confidence_distribution": defaultdict(list),
     }
 
     for test in test_cases:
@@ -220,6 +244,7 @@ def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
 
     return results
 
+
 def generate_threshold_recommendations(results):
     """Generate recommendations for threshold adjustments"""
     recommendations = []
@@ -247,6 +272,7 @@ def generate_threshold_recommendations(results):
 
     return recommendations
 
+
 def grid_search():
     """Find optimal ratio values"""
     test_cases = generate_test_cases()
@@ -269,6 +295,7 @@ def grid_search():
 
     return best_ratios, best_score
 
+
 def test_ratio_optimization():
     best_ratios, score = grid_search()
     logger.info(f"Optimal ratios found (F1={score:.2f}):")
@@ -276,10 +303,13 @@ def test_ratio_optimization():
     logger.info(f"ratio_nickname_match = {best_ratios['nickname']}")
     logger.info(f"ratio_name_org_match = {best_ratios['org']}")
 
+
 # --- Test Classes ---
 class TestFailureException(Exception):
     """Custom exception for test failures"""
+
     pass
+
 
 # --- Test Functions ---
 def test_merge_names():
@@ -365,11 +395,14 @@ def test_merge_names():
         logger.debug("\tStatus: PASSED")
 
         success_rate = (tests_passed / tests_run) * 100
-        logger.results(f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)")
+        logger.results(
+            f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)"
+        )
         return True
     except Exception:
         logger.error("Name merge tests failed", exc_info=True)
         raise
+
 
 def test_phone_matching():
     try:
@@ -476,11 +509,122 @@ def test_phone_matching():
         logger.debug("\tStatus: PASSED")
 
         success_rate = (tests_passed / tests_run) * 100
-        logger.results(f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)")
+        logger.results(
+            f"Test results: {tests_passed}/{tests_run} passed ({success_rate:.0f}%)"
+        )
         return True
     except Exception:
         logger.error("Phone matching tests failed", exc_info=True)
         raise
+
+
+def format_address_for_display(addr_dict):
+    """Format address dictionary for human readable output"""
+    vcard = addr_dict["vcard"]
+    parts = []
+    if vcard.get("street"):
+        parts.append(f"street: {vcard['street']}")
+    if vcard.get("locality"):
+        parts.append(f"city: {vcard['locality']}")
+    if vcard.get("postal_code"):
+        parts.append(f"postal: {vcard['postal_code']}")
+    if vcard.get("country"):
+        parts.append(f"country: {vcard['country']}")
+    status = []
+    if addr_dict.get("isBusiness"):
+        status.append("business")
+    if addr_dict.get("addressComplete"):
+        status.append("complete")
+    return f"{' | '.join(parts)} [{', '.join(status)}]"
+
+
+def test_address_processing():
+    test_cases = [
+        {
+            "input": "Bergstraße 51\nBerlin,  12169\nDeutschland, 51 Bergstraße\nBerlin",
+            "expected": {
+                "vcard": {
+                    "street": "Bergstraße 51",
+                    "locality": "Berlin",
+                    "postal_code": "12169",
+                    "country": "Deutschland",
+                },
+                "isBusiness": True,
+                "addressComplete": True,
+            },
+        },
+        {
+            "input": "Eichhörnchensteig 3\nBerlin,  14195\nDeutschland, 3 Eichhörnchensteig\nBerlin",
+            "expected": {
+                "vcard": {
+                    "street": "Eichhörnchensteig 3",
+                    "locality": "Berlin",
+                    "postal_code": "14193",
+                    "country": "Deutschland",
+                },
+                "isBusiness": False,
+                "addressComplete": True,
+            },
+        },
+        {
+            "input": ":::7 Willdenowstr.:::\nBerlin, ::: 13353\n:::",
+            "expected": {
+                "vcard": {
+                    "street": "Willdenowstraße 7",
+                    "locality": "Berlin",
+                    "postal_code": "13353",
+                    "country": "Deutschland",
+                },
+                "isBusiness": False,
+                "addressComplete": True,
+            },
+        },
+        {
+            "input": "5-1 Raiffeisenstraße 83129 Höslwang",
+            "expected": {
+                "vcard": {
+                    "street": "Raiffeisenstraße 51",
+                    "locality": "Höslwang",
+                    "postal_code": "83129",
+                    "country": "Deutschland",
+                },
+                "isBusiness": False,
+                "addressComplete": True,
+            },
+        },
+        {
+            "input": "Schützallee 35 Berlin,  14169 Germany",
+            "expected": {
+                "vcard": {
+                    "street": "Schützallee 35",
+                    "locality": "Berlin",
+                    "postal_code": "14169",
+                    "country": "Deutschland",
+                },
+                "isBusiness": False,
+                "addressComplete": True,
+            },
+        },
+    ]
+
+    for case in test_cases:
+        input_address = case["input"]
+        expected_output = case["expected"]
+        actual_output = normalize_address(
+            input_address, api_key, AddressValidationMode.FULL
+        )
+
+        if actual_output != expected_output:
+            logger.error("\nAddress Verification Failed:")
+            logger.error(f"Input:    {input_address}")
+            logger.error(f"Expected: {format_address_for_display(expected_output)}")
+            logger.error(f"Actual:   {format_address_for_display(actual_output)}")
+            logger.error(f"API Verdict: {actual_output.get('verdict', 'unknown')}")
+            logger.error("-" * 80)
+            raise AssertionError("Address verification failed")
+        else:
+            logger.debug(f"✓ Verified: {format_address_for_display(actual_output)}")
+
 
 def run_tests():
     """Run all test suites and return overall test status"""
@@ -488,6 +632,7 @@ def run_tests():
         logger.debug("STARTING TEST SUITES")
         test_merge_names()
         test_phone_matching()
+        test_address_processing()
         logger.results("ALL TEST SUITES COMPLETED")
         return True
     except TestFailureException:
