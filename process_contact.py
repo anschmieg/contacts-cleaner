@@ -4,9 +4,9 @@
 
 from fuzzywuzzy import fuzz
 from math import prod
-from constants import ratio_name_match, ratio_name_org_match
-from name_processing import get_contact_name, merge_names
-from phone_processing import (
+from config import ratio_name_match, ratio_name_org_match
+from process_name import get_contact_name, merge_names
+from process_phone import (
     any_phones_match,
     are_phones_matching,
     normalize_phone_list,

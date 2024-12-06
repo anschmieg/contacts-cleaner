@@ -1,8 +1,5 @@
 from collections import defaultdict
-from contact_processing import merge_names, are_phones_matching
-from name_processing import get_contact_name
-from phone_processing import any_phones_match, is_duplicate
-from fuzzywuzzy import fuzz
+from process_contact import merge_names, are_phones_matching, is_duplicate_with_confidence
 
 
 ###################

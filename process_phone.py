@@ -1,7 +1,4 @@
-from fuzzywuzzy import fuzz
-from constants import COUNTRY_PREFIXES, ratio_name_match, ratio_name_org_match
-from contact_processing import get_contact_name
-
+from config import COUNTRY_PREFIXES
 
 ###################
 # Phone Number Processing

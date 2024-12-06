@@ -1,5 +1,5 @@
 ###################
-# Constants
+# Configuration options
 ###################
 
 # Matching thresholds for fuzzy string comparison (0-100 scale)

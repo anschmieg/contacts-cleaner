@@ -3,7 +3,7 @@
 ###################
 
 import csv
-from constants import VCARD_FIELD_MAPPING
+from config import VCARD_FIELD_MAPPING
 import vobject
 
 

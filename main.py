@@ -6,7 +6,7 @@
 import os
 import sys
 from file_io import parse_vcard, save_to_csv
-from contact_processing import merge_duplicates
+from process_contact import merge_duplicates
 from validation import generate_merge_validation
 
 

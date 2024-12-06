@@ -4,8 +4,8 @@
 
 
 import pandas as pd
-from name_processing import get_contact_name
-from phone_processing import normalize_phone_list
+from process_name import get_contact_name
+from process_phone import normalize_phone_list
 
 
 def generate_merge_validation(

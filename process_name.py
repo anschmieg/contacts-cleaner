@@ -3,7 +3,7 @@
 ###################
 
 from fuzzywuzzy import fuzz
-from constants import NAME_PARTICLES, NAME_PREFIXES, NAME_SUFFIXES, ratio_nickname_match
+from config import NAME_PARTICLES, NAME_PREFIXES, NAME_SUFFIXES, ratio_nickname_match
 
 
 def merge_names(name1, name2):
