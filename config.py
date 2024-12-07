@@ -3,11 +3,11 @@
 ###################
 
 # Matching thresholds for fuzzy string comparison (0-100 scale)
-ratio_name_match = 75  # Base threshold for matching contact names
-ratio_nickname_match = 80  # Threshold for matching name variants/nicknames
-ratio_name_org_match = 85  # Threshold when both name AND organization present
-ratio_field_match = 70  # Threshold for matching non-name fields,e.g.
-# addresses, notes, descriptions
+ratio_name_match = 75       # Base threshold for matching contact names
+ratio_nickname_match = 70   # Threshold for matching name variants/nicknames
+ratio_name_org_match = 60   # Threshold when both name AND organization present
+ratio_field_match = 85      # Threshold for matching non-name fields, e.g.
+                            # addresses, notes, descriptions
 
 # Name normalization constants
 NAME_SUFFIXES = {"II", "III", "IV", "MD", "PhD", "Jr", "Sr"}

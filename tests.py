@@ -19,6 +19,7 @@ output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 log_file = output_dir / "test_results.log"
 
+# Set up file handler for all logging
 file_handler = logging.FileHandler(log_file)
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(
@@ -27,25 +28,33 @@ file_handler.setFormatter(
     )
 )
 
+# Set up console handler for errors and results only
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)
-console_handler.setFormatter(logging.Formatter("%(message)s"))
+console_handler.setLevel(logging.ERROR)  # Only ERROR and above (including RESULTS) go to console
+console_handler.setFormatter(
+    logging.Formatter("[%(levelname)s] %(message)s")
+)
 
-RESULTS_LEVEL = logging.ERROR
+# Define custom RESULTS level between ERROR and CRITICAL
+RESULTS_LEVEL = 45  # Changed to be between ERROR(40) and CRITICAL(50)
 logging.addLevelName(RESULTS_LEVEL, "RESULTS")
-
 
 def log_results(self, message, *args, **kwargs):
     if self.isEnabledFor(RESULTS_LEVEL):
         self._log(RESULTS_LEVEL, message, args, **kwargs)
 
-
 logging.Logger.results = log_results
-logging.basicConfig(
-    level=logging.DEBUG, handlers=[file_handler, console_handler], force=True
-)
-logger = logging.getLogger(__name__)
 
+# Configure root logger to ERROR to block debug messages
+logging.getLogger().setLevel(logging.ERROR)
+
+# Configure our module logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.ERROR)  # Changed from INFO to ERROR
+logger.handlers = []
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+logger.propagate = False
 
 # --- Test Cases ---
 def generate_test_cases():
@@ -153,157 +162,6 @@ def generate_test_cases():
     return test_pairs
 
 
-# --- Evaluation Functions ---
-def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
-    """Enhanced evaluation with detailed metrics and failure analysis"""
-    results = {
-        "metrics": {
-            "true_positives": 0,
-            "true_negatives": 0,
-            "false_positives": 0,
-            "false_negatives": 0,
-        },
-        "failures": [],
-        "categories": defaultdict(lambda: {"correct": 0, "total": 0}),
-        "confidence_distribution": defaultdict(list),
-    }
-
-    for test in test_cases:
-        contact1, contact2 = test["pair"]
-        expected = test["should_match"]
-        category = test.get("reason", "unknown")
-
-        # Get match result and confidence
-        match_details = is_duplicate_with_confidence(
-            contact1,
-            contact2,
-            ratio_name_match=name_ratio,
-            ratio_nickname_match=nickname_ratio,
-            ratio_name_org_match=org_ratio,
-        )
-        result = match_details["is_match"]
-        confidence = match_details["confidence"]
-
-        # Track confidence scores
-        results["confidence_distribution"][category].append(confidence)
-
-        # Update category stats
-        results["categories"][category]["total"] += 1
-        if result == expected:
-            results["categories"][category]["correct"] += 1
-
-        # Update confusion matrix
-        if result and expected:
-            results["metrics"]["true_positives"] += 1
-        elif not result and not expected:
-            results["metrics"]["true_negatives"] += 1
-        elif result and not expected:
-            results["metrics"]["false_positives"] += 1
-            results["failures"].append(
-                {
-                    "type": "false_positive",
-                    "contact1": contact1,
-                    "contact2": contact2,
-                    "category": category,
-                    "confidence": confidence,
-                }
-            )
-        else:
-            results["metrics"]["false_negatives"] += 1
-            results["failures"].append(
-                {
-                    "type": "false_negative",
-                    "contact1": contact1,
-                    "contact2": contact2,
-                    "category": category,
-                    "confidence": confidence,
-                }
-            )
-
-    # Calculate core metrics
-    m = results["metrics"]
-    total_positive = m["true_positives"] + m["false_positives"]
-    total_actual = m["true_positives"] + m["false_negatives"]
-
-    results["summary"] = {
-        "precision": m["true_positives"] / total_positive if total_positive > 0 else 0,
-        "recall": m["true_positives"] / total_actual if total_actual > 0 else 0,
-        "accuracy": (m["true_positives"] + m["true_negatives"]) / len(test_cases),
-        "category_accuracy": {
-            cat: stats["correct"] / stats["total"]
-            for cat, stats in results["categories"].items()
-        },
-    }
-
-    # Calculate F1 score
-    p, r = results["summary"]["precision"], results["summary"]["recall"]
-    results["summary"]["f1"] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0
-
-    # Generate recommendations
-    results["recommendations"] = generate_threshold_recommendations(results)
-
-    return results
-
-
-def generate_threshold_recommendations(results):
-    """Generate recommendations for threshold adjustments"""
-    recommendations = []
-
-    # Analyze false positives
-    fp_confidence = [
-        f["confidence"] for f in results["failures"] if f["type"] == "false_positive"
-    ]
-    if fp_confidence:
-        avg_fp_confidence = sum(fp_confidence) / len(fp_confidence)
-        if avg_fp_confidence < 0.9:
-            recommendations.append(
-                {
-                    "type": "threshold_increase",
-                    "reason": f"False positives averaging {avg_fp_confidence:.2f} confidence",
-                }
-            )
-
-    # Analyze category performance
-    for category, accuracy in results["summary"]["category_accuracy"].items():
-        if accuracy < 0.8:
-            recommendations.append(
-                {"type": "category_review", "category": category, "accuracy": accuracy}
-            )
-
-    return recommendations
-
-
-def grid_search():
-    """Find optimal ratio values"""
-    test_cases = generate_test_cases()
-    best_score = 0
-    best_ratios = None
-
-    for name_ratio in range(60, 95, 5):
-        for nickname_ratio in range(name_ratio, 95, 5):
-            for org_ratio in range(nickname_ratio, 95, 5):
-                scores = evaluate_ratios(
-                    name_ratio, nickname_ratio, org_ratio, test_cases
-                )
-                if scores["f1"] > best_score:
-                    best_score = scores["f1"]
-                    best_ratios = {
-                        "name": name_ratio,
-                        "nickname": nickname_ratio,
-                        "org": org_ratio,
-                    }
-
-    return best_ratios, best_score
-
-
-def test_ratio_optimization():
-    best_ratios, score = grid_search()
-    logger.info(f"Optimal ratios found (F1={score:.2f}):")
-    logger.info(f"ratio_name_match = {best_ratios['name']}")
-    logger.info(f"ratio_nickname_match = {best_ratios['nickname']}")
-    logger.info(f"ratio_name_org_match = {best_ratios['org']}")
-
-
 # --- Test Classes ---
 class TestFailureException(Exception):
     """Custom exception for test failures"""
@@ -314,85 +172,85 @@ class TestFailureException(Exception):
 # --- Test Functions ---
 def test_merge_names():
     try:
-        logger.debug("TEST SUITE: NAME MERGE")
+        logger.info("TEST SUITE: NAME MERGE")  # Changed from debug to info
         tests_run = tests_passed = 0
 
         # Test 1: Name variants
-        logger.debug("\tTEST 1/7: Name variants")
-        logger.debug("\tInput: 'John Smith' + 'Johnny Smith'")
+        logger.info("\tTEST 1/7: Name variants")  # Changed from debug to info
+        logger.info("\tInput: 'John Smith' + 'Johnny Smith'")  # Changed from debug to info
         result = merge_names("John Smith", "Johnny Smith")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "Johnny Smith":
             raise TestFailureException(f"Name variant test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 2: Hyphenated names
-        logger.debug("\tTEST 2/7: Hyphenated names")
-        logger.debug("\tInput: 'George Depression NoCorp' + 'George Winter-Depression'")
+        logger.info("\tTEST 2/7: Hyphenated names")  # Changed from debug to info
+        logger.info("\tInput: 'George Depression NoCorp' + 'George Winter-Depression'")  # Changed from debug to info
         result = merge_names("George Depression NoCorp", "George Winter-Depression")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "George Winter-Depression NoCorp":
             raise TestFailureException(f"Hyphenated name test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 3: Formal names with titles
-        logger.debug("\tTEST 3/7: Formal names with titles")
-        logger.debug("\tInput: 'Dr. James Wilson' + 'Jim Wilson MD'")
+        logger.info("\tTEST 3/7: Formal names with titles")  # Changed from debug to info
+        logger.info("\tInput: 'Dr. James Wilson' + 'Jim Wilson MD'")  # Changed from debug to info
         result = merge_names("Dr. James Wilson", "Jim Wilson MD")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "Dr. Jim James Wilson MD":
             raise TestFailureException(f"Formal name test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 4: Mixed case and spacing
-        logger.debug("\tTEST 4/7: Mixed case and spacing")
-        logger.debug("\tInput: 'mary-jane smith' + 'Mary Jane Smith-Jones'")
+        logger.info("\tTEST 4/7: Mixed case and spacing")  # Changed from debug to info
+        logger.info("\tInput: 'mary-jane smith' + 'Mary Jane Smith-Jones'")  # Changed from debug to info
         result = merge_names("mary-jane smith", "Mary Jane Smith-Jones")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "Mary-Jane Smith-Jones":
             raise TestFailureException(f"Mixed case test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 5: Complex multi-part names
-        logger.debug("\tTEST 5/7: Complex multi-part names")
-        logger.debug("\tInput: 'William Henry Gates III' + 'Bill Gates'")
+        logger.info("\tTEST 5/7: Complex multi-part names")  # Changed from debug to info
+        logger.info("\tInput: 'William Henry Gates III' + 'Bill Gates'")  # Changed from debug to info
         result = merge_names("William Henry Gates III", "Bill Gates")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "William Bill Henry Gates III":
             raise TestFailureException(f"Complex name test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 6: Names with middle initials
-        logger.debug("\tTEST 6/7: Names with middle initials")
-        logger.debug("\tInput: 'Robert J. Smith' + 'Bob Smith Jr.'")
+        logger.info("\tTEST 6/7: Names with middle initials")  # Changed from debug to info
+        logger.info("\tInput: 'Robert J. Smith' + 'Bob Smith Jr.'")  # Changed from debug to info
         result = merge_names("Robert J. Smith", "Bob Smith Jr.")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "Robert Bob J. Smith Jr.":
             raise TestFailureException(f"Middle initial test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 7: Different ordering but same components
-        logger.debug("\tTEST 7/7: Different ordering")
-        logger.debug("\tInput: 'Smith, John A.' + 'John Adam Smith'")
+        logger.info("\tTEST 7/7: Different ordering")  # Changed from debug to info
+        logger.info("\tInput: 'Smith, John A.' + 'John Adam Smith'")  # Changed from debug to info
         result = merge_names("Smith, John A.", "John Adam Smith")
-        logger.debug(f"\tOutput: '{result}'")
+        logger.info(f"\tOutput: '{result}'")  # Changed from debug to info
         if result != "John A. Adam Smith":
             raise TestFailureException(f"Ordering test failed. Got: {result}")
         tests_run += 1
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         success_rate = (tests_passed / tests_run) * 100
         logger.results(
@@ -406,107 +264,107 @@ def test_merge_names():
 
 def test_phone_matching():
     try:
-        logger.debug("TEST SUITE: PHONE MATCHING")
+        logger.info("TEST SUITE: PHONE MATCHING")  # Changed from debug to info
         tests_run = tests_passed = 0
 
         # Test 1: Exact match
-        logger.debug("\tTEST 1/9: Exact phone match")
-        logger.debug("\tInput: '+1-800-555-5555' vs '+1-800-555-5555'")
+        logger.info("\tTEST 1/9: Exact phone match")  # Changed from debug to info
+        logger.info("\tInput: '+1-800-555-5555' vs '+1-800-555-5555'")  # Changed from debug to info
         result = are_phones_matching("+1-800-555-5555", "+1-800-555-5555")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if not result:
             raise TestFailureException("Exact phone match test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 2: Different formats
-        logger.debug("\tTEST 2/9: Different formats")
-        logger.debug("\tInput: '800-555-5555' vs '+1 800 555 5555'")
+        logger.info("\tTEST 2/9: Different formats")  # Changed from debug to info
+        logger.info("\tInput: '800-555-5555' vs '+1 800 555 5555'")  # Changed from debug to info
         result = are_phones_matching("800-555-5555", "+1 800 555 5555")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if not result:
             raise TestFailureException("Phone format test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 3: International format vs local format
-        logger.debug("\tTEST 3/9: International format vs local format")
-        logger.debug("\tInput: '+44 20 7946 0958' vs '020 7946 0958'")
+        logger.info("\tTEST 3/9: International format vs local format")  # Changed from debug to info
+        logger.info("\tInput: '+44 20 7946 0958' vs '020 7946 0958'")  # Changed from debug to info
         result = are_phones_matching("+44 20 7946 0958", "020 7946 0958")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if not result:
             raise TestFailureException("International format test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 4: Different country codes
-        logger.debug("\tTEST 4/9: Different country codes")
-        logger.debug("\tInput: '+1-800-555-5555' vs '+44 800 555 5555'")
+        logger.info("\tTEST 4/9: Different country codes")  # Changed from debug to info
+        logger.info("\tInput: '+1-800-555-5555' vs '+44 800 555 5555'")  # Changed from debug to info
         result = are_phones_matching("+1-800-555-5555", "+44 800 555 5555")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if result:
             raise TestFailureException("Country code test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 5: Number with symbols
-        logger.debug("\tTEST 5/9: Number with symbols")
-        logger.debug("\tInput: '(800) 555-5555' vs '+1 800.555.5555'")
+        logger.info("\tTEST 5/9: Number with symbols")  # Changed from debug to info
+        logger.info("\tInput: '(800) 555-5555' vs '+1 800.555.5555'")  # Changed from debug to info
         result = are_phones_matching("(800) 555-5555", "+1 800.555.5555")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if not result:
             raise TestFailureException("Symbol test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 6: Number with extension
-        logger.debug("\tTEST 6/9: Number with extension")
-        logger.debug("\tInput: '+1-800-555-5555 ext. 123' vs '+1 800 555 5555 x123'")
+        logger.info("\tTEST 6/9: Number with extension")  # Changed from debug to info
+        logger.info("\tInput: '+1-800-555-5555 ext. 123' vs '+1 800 555 5555 x123'")  # Changed from debug to info
         result = are_phones_matching("+1-800-555-5555 ext. 123", "+1 800 555 5555 x123")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if not result:
             raise TestFailureException("Extension test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 7: Different numbers
-        logger.debug("\tTEST 7/9: Different numbers")
-        logger.debug("\tInput: '+1-800-555-5555' vs '+1-800-555-5556'")
+        logger.info("\tTEST 7/9: Different numbers")  # Changed from debug to info
+        logger.info("\tInput: '+1-800-555-5555' vs '+1-800-555-5556'")  # Changed from debug to info
         result = are_phones_matching("+1-800-555-5555", "+1-800-555-5556")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if result:
             raise TestFailureException("Different number test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 8: Empty numbers
-        logger.debug("\tTEST 8/9: Empty numbers")
-        logger.debug("\tInput: '' vs '+1-800-555-5555'")
+        logger.info("\tTEST 8/9: Empty numbers")  # Changed from debug to info
+        logger.info("\tInput: '' vs '+1-800-555-5555'")  # Changed from debug to info
         result = are_phones_matching("", "+1-800-555-5555")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if are_phones_matching("", "+1-800-555-5555"):  # This test is correct
             raise TestFailureException("Empty number test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         # Test 9: Both numbers empty
-        logger.debug("\tTEST 9/9: Both numbers empty")
-        logger.debug("\tInput: '' vs ''")
+        logger.info("\tTEST 9/9: Both numbers empty")  # Changed from debug to info
+        logger.info("\tInput: '' vs ''")  # Changed from debug to info
         result = are_phones_matching("", "")
-        logger.debug(f"\tResult: {result}")
+        logger.info(f"\tResult: {result}")  # Changed from debug to info
         tests_run += 1
         if result:  # Changed: empty strings should not match
             raise TestFailureException("Both empty test failed")
         tests_passed += 1
-        logger.debug("\tStatus: PASSED")
+        logger.info("\tStatus: PASSED")  # Changed from debug to info
 
         success_rate = (tests_passed / tests_run) * 100
         logger.results(
@@ -623,13 +481,13 @@ def test_address_processing():
             logger.error("-" * 80)
             raise AssertionError("Address verification failed")
         else:
-            logger.debug(f"✓ Verified: {format_address_for_display(actual_output)}")
+            logger.info(f"✓ Verified: {format_address_for_display(actual_output)}")  # Changed from debug to info
 
 
 def run_tests():
     """Run all test suites and return overall test status"""
     try:
-        logger.debug("STARTING TEST SUITES")
+        logger.info("STARTING TEST SUITES")  # Changed from debug to info
         test_merge_names()
         test_phone_matching()
         test_address_processing()
@@ -643,3 +501,154 @@ def run_tests():
         return False
     finally:
         logger.results("-" * 60)
+
+
+# --- Evaluation Functions ---
+def evaluate_ratios(name_ratio, nickname_ratio, org_ratio, test_cases):
+    ratios = {"name": name_ratio, "nickname": nickname_ratio, "org": org_ratio}
+
+    results = {
+        "metrics": {
+            "true_positives": 0,
+            "true_negatives": 0,
+            "false_positives": 0,
+            "false_negatives": 0,
+        },
+        "failures": [],
+        "categories": defaultdict(lambda: {"correct": 0, "total": 0}),
+        "confidence_distribution": defaultdict(list),
+    }
+
+    for test in test_cases:
+        contact1, contact2 = test["pair"]
+        expected = test["should_match"]
+        category = test.get("reason", "unknown")
+
+        match_details = is_duplicate_with_confidence(contact1, contact2, ratios)
+        result = match_details["is_match"]
+        confidence = match_details["confidence"]
+
+        results["confidence_distribution"][category].append(confidence)
+        results["categories"][category]["total"] += 1
+        if result == expected:
+            results["categories"][category]["correct"] += 1
+
+        if result and expected:
+            results["metrics"]["true_positives"] += 1
+        elif not result and not expected:
+            results["metrics"]["true_negatives"] += 1
+        elif result and not expected:
+            results["metrics"]["false_positives"] += 1
+            results["failures"].append(
+                {
+                    "type": "false_positive",
+                    "contact1": contact1,
+                    "contact2": contact2,
+                    "category": category,
+                    "confidence": confidence,
+                }
+            )
+        else:
+            results["metrics"]["false_negatives"] += 1
+            results["failures"].append(
+                {
+                    "type": "false_negative",
+                    "contact1": contact1,
+                    "contact2": contact2,
+                    "category": category,
+                    "confidence": confidence,
+                }
+            )
+
+    m = results["metrics"]
+    total_positive = m["true_positives"] + m["false_positives"]
+    total_actual = m["true_positives"] + m["false_negatives"]
+
+    results["summary"] = {
+        "precision": m["true_positives"] / total_positive if total_positive > 0 else 0,
+        "recall": m["true_positives"] / total_actual if total_actual > 0 else 0,
+        "accuracy": (m["true_positives"] + m["true_negatives"]) / len(test_cases),
+        "category_accuracy": {
+            cat: stats["correct"] / stats["total"]
+            for cat, stats in results["categories"].items()
+        },
+    }
+
+    p, r = results["summary"]["precision"], results["summary"]["recall"]
+    results["summary"]["f1"] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0
+
+    results["recommendations"] = generate_threshold_recommendations(results)
+
+    return results["summary"]
+
+
+def generate_threshold_recommendations(results):
+    """Generate recommendations for threshold adjustments"""
+    recommendations = []
+
+    # Analyze false positives
+    fp_confidence = [
+        f["confidence"] for f in results["failures"] if f["type"] == "false_positive"
+    ]
+    if fp_confidence:
+        avg_fp_confidence = sum(fp_confidence) / len(fp_confidence)
+        if avg_fp_confidence < 0.9:
+            recommendations.append(
+                {
+                    "type": "threshold_increase",
+                    "reason": f"False positives averaging {avg_fp_confidence:.2f} confidence",
+                }
+            )
+
+    # Analyze category performance
+    for category, accuracy in results["summary"]["category_accuracy"].items():
+        if accuracy < 0.8:
+            recommendations.append(
+                {"type": "category_review", "category": category, "accuracy": accuracy}
+            )
+
+    return recommendations
+
+
+def grid_search():
+    test_cases = generate_test_cases()
+    best_score = 0
+    best_ratios = None
+
+    for name_ratio in range(60, 95, 5):
+        for nickname_ratio in range(name_ratio, 95, 5):
+            for org_ratio in range(nickname_ratio, 95, 5):
+                scores = evaluate_ratios(
+                    name_ratio, nickname_ratio, org_ratio, test_cases
+                )
+                if scores["f1"] > best_score:
+                    best_score = scores["f1"]
+                    best_ratios = {
+                        "name": name_ratio,
+                        "nickname": nickname_ratio,
+                        "org": org_ratio,
+                    }
+
+    return best_ratios, best_score
+
+
+def test_ratio_optimization():
+    best_ratios, score = grid_search()
+    logger.info(f"Optimal ratios found (F1={score:.2f}):")
+    logger.info(f"ratio_name_match = {best_ratios['name']}")
+    logger.info(f"ratio_nickname_match = {best_ratios['nickname']}")
+    logger.info(f"ratio_name_org_match = {best_ratios['org']}")
+    return best_ratios, score
+
+
+def main_test_ratio_optimization():
+    """Run ratio optimization as a standalone function"""
+    logger.info("Starting ratio optimization...")
+    best_ratios, score = test_ratio_optimization()
+    print("\nOptimization Results:")
+    print("-" * 20)
+    print(f"Best F1 Score: {score:.3f}")
+    print(f"Name Match Ratio: {best_ratios['name']}")
+    print(f"Nickname Match Ratio: {best_ratios['nickname']}")
+    print(f"Organization Match Ratio: {best_ratios['org']}")
+    return best_ratios

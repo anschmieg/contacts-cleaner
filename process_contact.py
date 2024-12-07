@@ -6,8 +6,11 @@ import os
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from math import prod
-from config import ratio_name_match, ratio_name_org_match
-from process_address import normalize_address, AddressValidationMode
+from process_address import (
+    normalize_address, 
+    AddressValidationMode,
+    string_to_address_dict  # Add this import
+)
 from process_name import get_contact_name, merge_names
 from process_phone import (
     any_phones_match,
@@ -235,8 +238,15 @@ def merge_duplicates(
     return result
 
 
-def is_duplicate(contact1, contact2, comparison_cache=None):
-    """Enhanced duplicate detection with org-name crossover matching"""
+def is_duplicate(
+    contact1,
+    contact2,
+    comparison_cache=None,
+    name_ratio=85,
+    nickname_ratio=90,
+    org_ratio=95,
+):
+    """Enhanced duplicate detection with configurable ratio thresholds"""
     if not contact1 or not contact2:
         return False
 
@@ -260,19 +270,19 @@ def is_duplicate(contact1, contact2, comparison_cache=None):
 
     # Check if org from one contact appears in name of other
     if (org1 and org1 in name2) or (org2 and org2 in name1):
-        name_ratio = fuzz.ratio(name1, name2)
-        result = name_ratio >= ratio_name_match
+        name_match = fuzz.ratio(name1, name2)
+        result = name_match >= name_ratio
         if comparison_cache is not None:
             comparison_cache[cache_key] = result
         return result
 
     # 3. Regular name matching with organization verification
-    name_ratio = fuzz.ratio(name1, name2)
-    if name_ratio >= ratio_name_match:
+    name_match = fuzz.ratio(name1, name2)
+    if name_match >= name_ratio:
         # If both have orgs, they must match
         if org1 and org2:
-            org_ratio = fuzz.ratio(org1, org2)
-            result = org_ratio >= ratio_name_org_match
+            org_match = fuzz.ratio(org1, org2)
+            result = org_match >= org_ratio
             if comparison_cache is not None:
                 comparison_cache[cache_key] = result
             return result
@@ -291,33 +301,106 @@ def is_duplicate(contact1, contact2, comparison_cache=None):
     return False
 
 
-def is_duplicate_with_confidence(contact1, contact2, **ratios):
-    """Enhanced duplicate detection that returns confidence score"""
-    confidence_scores = []
+def is_duplicate_with_confidence(contact1, contact2, ratios=None):
+    """Check if two contacts are duplicates and return match details with confidence score"""
+    if ratios is None:
+        ratios = {
+            "name": 85,  # default threshold for name matching
+            "nickname": 90,  # higher threshold for nicknames
+            "org": 95,  # highest threshold for organization names
+        }
 
-    # Name matching confidence
-    name1 = get_contact_name(contact1)
-    name2 = get_contact_name(contact2)
-    name_ratio = fuzz.ratio(name1.lower(), name2.lower())
-    confidence_scores.append(name_ratio / 100)
-
-    # Organization matching confidence
-    org1 = contact1.get("Organization", "").strip()
-    org2 = contact2.get("Organization", "").strip()
-    if org1 and org2:
-        org_ratio = fuzz.ratio(org1.lower(), org2.lower())
-        confidence_scores.append(org_ratio / 100)
-
-    # Phone matching (binary confidence)
-    if any_phones_match(contact1, contact2):
-        confidence_scores.append(1.0)
-
-    # Calculate overall confidence
-    confidence = (
-        sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0
+    match = is_duplicate(
+        contact1,
+        contact2,
+        name_ratio=ratios["name"],
+        nickname_ratio=ratios["nickname"],
+        org_ratio=ratios["org"],
     )
 
     return {
-        "is_match": is_duplicate(contact1, contact2, **ratios),
-        "confidence": confidence,
+        "is_match": match,
+        "confidence": calculate_match_confidence(contact1, contact2),
     }
+
+
+def calculate_match_confidence(contact1, contact2):
+    """Calculate confidence score for contact matching based on multiple criteria"""
+    confidence_scores = []
+
+    # 1. Name similarity (0-1)
+    name1 = get_contact_name(contact1).lower()
+    name2 = get_contact_name(contact2).lower()
+    if name1 and name2:
+        name_similarity = fuzz.ratio(name1, name2) / 100
+        confidence_scores.append(name_similarity)
+
+    # 2. Organization matching (0-1)
+    org1 = contact1.get("Organization", "").strip().lower()
+    org2 = contact2.get("Organization", "").strip().lower()
+    if org1 and org2:
+        org_similarity = fuzz.ratio(org1, org2) / 100
+        confidence_scores.append(org_similarity)
+
+    # 3. Phone number exact match (1.0)
+    if any_phones_match(contact1, contact2):
+        confidence_scores.append(1.0)
+
+    # 4. Email exact match (1.0)
+    email1 = contact1.get("Email", [])
+    email2 = contact2.get("Email", [])
+    # Convert to lists if strings
+    if isinstance(email1, str):
+        email1 = [email1]
+    if isinstance(email2, str):
+        email2 = [email2]
+    # Compare emails
+    if email1 and email2:
+        # Check if any emails match between the two contacts
+        if any(e1.strip().lower() == e2.strip().lower() 
+              for e1 in email1 for e2 in email2):
+            confidence_scores.append(1.0)
+
+    # Calculate weighted average if we have any scores
+    if confidence_scores:
+        return prod(confidence_scores) ** (1 / len(confidence_scores)) if confidence_scores else 0.0
+
+    return 0.0
+
+
+def process_contact(contact, validation_mode=AddressValidationMode.FULL):
+    """Process a single contact and standardize its format"""
+    # Extract base contact information
+    processed = {
+        "Name": contact.get("Name", ""),
+        "FirstName": contact.get("FirstName", ""),
+        "LastName": contact.get("LastName", ""),
+        "Organization": contact.get("Organization", ""),
+        "Email": contact.get("Email", []),
+        "Phone": contact.get("Phone", []),
+        "Birthday": contact.get("Birthday", ""),
+    }
+    
+    # Process address if present
+    if "Address" in contact:
+        address = contact["Address"]
+        if isinstance(address, str):
+            address = string_to_address_dict(address)
+            
+        vcard = address.get("vcard", {})
+        processed.update({
+            "ADR_POBox": vcard.get("po_box", ""),
+            "ADR_Extended": vcard.get("extended", ""),
+            "ADR_Street": vcard.get("street", ""),
+            "ADR_Locality": vcard.get("locality", ""),
+            "ADR_Region": vcard.get("region", ""),
+            "ADR_PostalCode": vcard.get("postal_code", ""),
+            "ADR_Country": vcard.get("country", ""),
+            "ADR_Label": vcard.get("label", ""),
+            "ADR_IsBusiness": address.get("isBusiness", False),
+            "ADR_Complete": address.get("addressComplete", False),
+            "ADR_Original": address.get("OriginalAddress", ""),
+            "ADR_ValidationVerdict": address.get("_AddressValidation", {}).get("verdict", "")
+        })
+    
+    return processed
