@@ -50,12 +50,14 @@ def main(input_paths, validation_mode=AddressValidationMode.FULL):
                 else:
                     address_stats["ambiguous"] += 1
 
-    # Process contacts but keep original address format
+    # Process contacts
+    processed_contacts = []
     for contact in all_contacts:
-        if "Address" in contact:
-            # Keep address as-is for now
-            continue
+        processed = process_contact(contact, validation_mode)
+        processed_contacts.append(processed)
     
+    all_contacts = processed_contacts
+
     # Keep copy of original contacts for validation
     original_contacts = all_contacts.copy()
 

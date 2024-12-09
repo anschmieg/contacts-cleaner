@@ -7,9 +7,12 @@ from config import VCARD_FIELD_MAPPING
 import vobject
 from process_address import string_to_address_dict  # Add this import
 import os  # Add this import
+from process_name import get_contact_name  # Add this import
+import logging
 
 
 def parse_vcard(vcf_file):
+    logging.debug(f"Parsing VCF file: {vcf_file}")
     contacts = []
     with open(vcf_file, "r", encoding="utf-8") as file:
         vcard_data = file.read()
@@ -18,7 +21,9 @@ def parse_vcard(vcf_file):
             for key, label in VCARD_FIELD_MAPPING.items():
                 if hasattr(vcard, key.lower()):
                     field = getattr(vcard, key.lower())
+                    logging.debug(f"Processing field: {key}")
                     if key == "N":  # Special handling for Name objects
+                        logging.debug(f"Processing Name field: {field}")
                         if hasattr(field, "value"):
                             name_parts = []
                             # Extract available name components
@@ -33,158 +38,203 @@ def parse_vcard(vcf_file):
                             if field.value.suffix:
                                 name_parts.append(str(field.value.suffix))
                             contact[label] = " ".join(filter(None, name_parts))
-                    elif isinstance(field, list):
-                        contact[label] = ", ".join(
-                            [
-                                str(f.value) if hasattr(f, "value") else str(f)
-                                for f in field
-                            ]
-                        )
+                    elif key == "ADR":  # Special handling for Address objects
+                        logging.debug(f"Processing Address field: {field}")
+                        if isinstance(field, list):
+                            addresses = []
+                            for addr in field:
+                                if hasattr(addr, "value"):
+                                    logging.debug(f"Processing Address value: {addr.value}")
+                                    # Split multiline addresses properly
+                                    street_parts = str(addr.value[2] or "").split('\n')
+                                    street_address = ' '.join(filter(None, street_parts))
+                                    
+                                    addr_dict = {
+                                        "vcard": {
+                                            "po_box": str(addr.value[0] or "").strip(),
+                                            "extended": str(addr.value[1] or "").strip(),
+                                            "street": street_address.strip(),
+                                            "locality": str(addr.value[3] or "").strip(),
+                                            "region": str(addr.value[4] or "").strip(),
+                                            "postal_code": str(addr.value[5] or "").strip(),
+                                            "country": str(addr.value[6] or "").strip(),
+                                        },
+                                        "OriginalAddress": ", ".join(filter(None, map(str, addr.value))),
+                                        "_AddressValidation": {"verdict": "UNPROCESSED"},
+                                        "metadata": {"isBusiness": False, "addressComplete": False}
+                                    }
+                                    logging.debug(f"Address dict: {addr_dict}")
+                                    # Create formatted label
+                                    label_parts = [
+                                        p for p in [
+                                            addr_dict["vcard"]["street"],
+                                            addr_dict["vcard"]["locality"],
+                                            addr_dict["vcard"]["region"],
+                                            addr_dict["vcard"]["postal_code"],
+                                            addr_dict["vcard"]["country"]
+                                        ] if p
+                                    ]
+                                    addr_dict["vcard"]["label"] = ", ".join(label_parts)
+                                    addresses.append(addr_dict)
+                            contact[label] = addresses if addresses else None
+                            logging.debug(f"Processed Address field: {contact[label]}")
+                        else:
+                            # Handle single address
+                            if hasattr(field, "value"):
+                                contact[label] = str(field.value)
+                            else:
+                                contact[label] = str(field)
                     else:
                         contact[label] = (
                             str(field.value) if hasattr(field, "value") else str(field)
                         )
+            # After processing all fields
+            if 'Address' in contact and contact['Address']:
+                logging.debug(f"Contact has address: {contact['Address']}")
+            name_fields = ["Full Name", "Name", "FirstName", "LastName", "Structured Name"]
+            if not any(contact.get(field) for field in name_fields):
+                logging.debug("No name fields populated, constructing a pseudo-name.")
+                # Construct pseudo-name from available fields
+                pseudo_name = None
+                if contact.get("Email"):
+                    email = contact["Email"]
+                    if isinstance(email, list):
+                        email = email[0]
+                    pseudo_name = email.split("@")[0].replace(".", " ").title()
+                elif contact.get("Telephone"):
+                    phone = contact["Telephone"]
+                    if isinstance(phone, list):
+                        phone = phone[0]
+                    pseudo_name = phone
+                elif contact.get("Organization"):
+                    pseudo_name = contact["Organization"]
+                else:
+                    pseudo_name = "Unknown"
+                # Set the pseudo-name in name fields
+                contact["Full Name"] = pseudo_name
+                contact["Name"] = pseudo_name
+                logging.debug(f"Constructed pseudo-name: {pseudo_name}")
             contacts.append(contact)
-    print(f"--> {len(contacts)} contacts from {vcf_file}")
+    logging.info(f"Total contacts parsed from {vcf_file}: {len(contacts)}")
     return contacts
 
 
 def save_to_csv(contacts, output_file):
+    logging.debug(f"Saving contacts to CSV: {output_file}")
     """Save contacts to CSV file with proper vCard 4.0 address handling"""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
+
     fieldnames = [
-        'Full Name', 'Name', 'FirstName', 'LastName',
-        'Organization', 'Email', 'Telephone', 'Birthday',
+        "Full Name",
+        "Name",
+        "FirstName",
+        "LastName",
+        "Organization",
+        "Email",
+        "Telephone",
+        "Birthday",
         # vCard 4.0 address components
-        'ADR_POBox',          # Post Office Box
-        'ADR_Extended',       # Extended Address (apt, suite, etc.)
-        'ADR_Street',         # Street Address
-        'ADR_Locality',       # City
-        'ADR_Region',         # State/Province
-        'ADR_PostalCode',     # ZIP/Postal Code
-        'ADR_Country',        # Country
-        'ADR_Label',          # Formatted address string
-        'Match Confidence'
+        "ADR_POBox",  # Post Office Box
+        "ADR_Extended",  # Extended Address (apt, suite, etc.)
+        "ADR_Street",  # Street Address
+        "ADR_Locality",  # City
+        "ADR_Region",  # State/Province
+        "ADR_PostalCode",  # ZIP/Postal Code
+        "ADR_Country",  # Country
+        "ADR_Label",  # Formatted address string
+        "Match Confidence",
     ]
 
-    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+    with open(output_file, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        
-        for contact in contacts:
-            # Extract address components if present
-            address_components = {}
-            if 'Address' in contact:
-                addr = contact['Address']
-                if isinstance(addr, dict):
-                    vcard = addr.get('vcard', {})
-                    address_components = {
-                        'ADR_POBox': vcard.get('po_box', ''),
-                        'ADR_Extended': vcard.get('extended', ''),
-                        'ADR_Street': vcard.get('street', ''),
-                        'ADR_Locality': vcard.get('locality', ''),
-                        'ADR_Region': vcard.get('region', ''),
-                        'ADR_PostalCode': vcard.get('postal_code', ''),
-                        'ADR_Country': vcard.get('country', ''),
-                        'ADR_Label': vcard.get('label', '')
-                    }
 
-            # Combine with other contact fields
+        for contact in contacts:
+            # Create row directly from contact fields, including ADR_ prefixed fields
             row = {
-                'Full Name': contact.get('Full Name', ''),
-                'Name': contact.get('Name', ''),
-                'FirstName': contact.get('FirstName', ''),
-                'LastName': contact.get('LastName', ''),
-                'Organization': contact.get('Organization', ''),
-                'Email': contact.get('Email', ''),
-                'Telephone': contact.get('Telephone', ''),
-                'Birthday': contact.get('Birthday', ''),
-                'Match Confidence': contact.get('Match Confidence', ''),
-                **address_components  # Merge in address components
+                "Full Name": contact.get("Full Name", ""),
+                "Name": contact.get("Name", ""),
+                "FirstName": contact.get("FirstName", ""),
+                "LastName": contact.get("LastName", ""),
+                "Organization": contact.get("Organization", ""),
+                "Email": contact.get("Email", ""),
+                "Telephone": contact.get("Telephone", ""),
+                "Birthday": contact.get("Birthday", ""),
+                "Match Confidence": contact.get("Match Confidence", ""),
+                # Add address fields directly from contact
+                "ADR_POBox": contact.get("ADR_POBox", ""),
+                "ADR_Extended": contact.get("ADR_Extended", ""),
+                "ADR_Street": contact.get("ADR_Street", ""),
+                "ADR_Locality": contact.get("ADR_Locality", ""),
+                "ADR_Region": contact.get("ADR_Region", ""),
+                "ADR_PostalCode": contact.get("ADR_PostalCode", ""),
+                "ADR_Country": contact.get("ADR_Country", ""),
+                "ADR_Label": contact.get("ADR_Label", ""),
             }
-            
+
+            # Handle address fields
+            addresses = contact.get("Address", [])
+            if addresses:
+                addr = addresses[0] if isinstance(addresses, list) else addresses
+                if isinstance(addr, dict):  # Ensure we have a dictionary
+                    vcard_addr = addr.get('vcard', {})
+                    
+                    # Map address components to CSV fields
+                    row.update({
+                        'ADR_POBox': vcard_addr.get('po_box', '').strip(),
+                        'ADR_Extended': vcard_addr.get('extended', '').strip(),
+                        'ADR_Street': vcard_addr.get('street', '').strip(),
+                        'ADR_Locality': vcard_addr.get('locality', '').strip(),
+                        'ADR_Region': vcard_addr.get('region', '').strip(),
+                        'ADR_PostalCode': vcard_addr.get('postal_code', '').strip(),
+                        'ADR_Country': vcard_addr.get('country', '').strip(),
+                        'ADR_Label': vcard_addr.get('label', '').strip()
+                    })
+
+            logging.debug(f"Writing contact to CSV: {row}")
             writer.writerow(row)
+    logging.info(f"Contacts saved to {output_file}")
 
 
 def save_address_validation_report(contacts, output_file):
-    """Save address validation results to a CSV file."""
-    with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
+    """Save address validation results to CSV"""
+    with open(output_file, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
         writer.writerow(
             [
                 "Contact Name",
                 "Original Address",
-                "Processed Address",
-                "Validation Status",
-                "Unconfirmed Components",
-                "Missing Components",
-                "Component Confirmation Levels",
+                "Validated Address",
+                "Verdict",
+                "Is Business",
+                "Is Complete",
             ]
         )
 
         for contact in contacts:
-            if "Address" not in contact:
-                continue
+            name = get_contact_name(contact)
+            addresses = contact.get("Address", [])
 
-            name = contact.get("FullName", "Unknown")
-            address = contact["Address"]
-            if isinstance(address, str):
-                address = string_to_address_dict(address)
+            # Handle both list and single address formats
+            if not isinstance(addresses, list):
+                addresses = [addresses]
 
-            processed = address.get("vcard", {})
-            processed_addr = ", ".join(
-                filter(
-                    None,
+            # Write a row for each address
+            for address in addresses:
+                if not address:
+                    continue
+
+                processed = address.get("vcard", {})
+                validation = address.get("_AddressValidation", {})
+                metadata = address.get("metadata", {})
+
+                writer.writerow(
                     [
-                        processed.get("street", ""),
-                        processed.get("locality", ""),
-                        processed.get("postal_code", ""),
-                        processed.get("country", ""),
-                    ],
+                        name,
+                        address.get("OriginalAddress", ""),
+                        processed.get("label", ""),
+                        validation.get("verdict", "UNKNOWN"),
+                        metadata.get("isBusiness", False),
+                        metadata.get("addressComplete", False),
+                    ]
                 )
-            )
-
-            validation = address.get("_AddressValidation", {})
-            verdict = validation.get("verdict", "UNPROCESSED")
-
-            status = "Invalid"
-            if verdict == "CONFIRMED":
-                status = "Valid"
-            elif verdict not in ["failed", "UNCONFIRMED", "UNPROCESSED"]:
-                status = "Ambiguous"
-
-            # Extract confirmation levels and components
-            confirmation_levels = validation.get("confirmationLevels", {})
-            unconfirmed = ", ".join(validation.get("unconfirmedComponents", []))
-            missing = ", ".join(validation.get("missingComponents", []))
-
-            # Consolidate confirmation levels
-            confirmation_counts = {}
-            for level in confirmation_levels.values():
-                # Clean up level names
-                level = level.replace("UNCONFIRMED_BUT_", "")
-                level = level.replace("UNCONFIRMED_AND_", "")
-                if level != "UNKNOWN":
-                    confirmation_counts[level] = confirmation_counts.get(level, 0) + 1
-
-            # Format the confirmation summary
-            confirmation_summary = (
-                ", ".join(
-                    f"{count} {level}"
-                    for level, count in sorted(confirmation_counts.items())
-                )
-                or "UNKNOWN"
-            )
-
-            writer.writerow(
-                [
-                    name,
-                    address.get("OriginalAddress", processed_addr),
-                    processed_addr,
-                    status,
-                    unconfirmed,
-                    missing,
-                    confirmation_summary,
-                ]
-            )
