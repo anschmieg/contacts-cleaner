@@ -65,9 +65,63 @@ def extract_name_variants(contact):
 
 
 def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
-    """Modified contact merging to preserve all name components"""
     merged_contact = {}
     confidence_scores = []
+
+    # First collect and normalize all name variants
+    first_names = set()
+    last_names = set()
+    
+    for duplicate in duplicates:
+        # Handle FirstName and LastName fields
+        if duplicate.get("FirstName"):
+            names = [n.strip() for n in duplicate["FirstName"].replace("\\,", ",").split(",")]
+            first_names.update(names)
+        
+        if duplicate.get("LastName"):
+            names = [n.strip() for n in duplicate["LastName"].replace("\\,", ",").split(",")]
+            last_names.update(names)
+            
+        # Also process full names if available
+        if duplicate.get("Full Name"):
+            full = duplicate["Full Name"].replace("\\,", ",")
+            if "," in full:
+                # If comma-separated, assume "LastName, FirstName" format
+                parts = [p.strip() for p in full.split(",")]
+                if len(parts) == 2:
+                    last_names.add(parts[0])
+                    first_names.add(parts[1])
+            else:
+                # Otherwise split by space and take last word as last name
+                parts = full.split()
+                if len(parts) > 1:
+                    first_names.add(" ".join(parts[:-1]))
+                    last_names.add(parts[-1])
+    
+    # Merge first and last names separately
+    if first_names:
+        first = next(iter(first_names))
+        for name in first_names:
+            if name != first:
+                first = merge_names(first, name)
+        merged_contact["FirstName"] = first
+        
+    if last_names:
+        last = next(iter(last_names))
+        for name in last_names:
+            if name != last:
+                last = merge_names(last, name)
+        merged_contact["LastName"] = last
+    
+    # Construct full name from merged components
+    if "FirstName" in merged_contact or "LastName" in merged_contact:
+        full_name_parts = []
+        if merged_contact.get("FirstName"):
+            full_name_parts.append(merged_contact["FirstName"])
+        if merged_contact.get("LastName"):
+            full_name_parts.append(merged_contact["LastName"])
+        merged_contact["Full Name"] = " ".join(full_name_parts)
+        merged_contact["Name"] = merged_contact["Full Name"]
 
     # Collect all name variants first
     all_names = {

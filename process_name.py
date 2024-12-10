@@ -5,34 +5,35 @@
 from fuzzywuzzy import fuzz
 from config import NAME_PARTICLES, NAME_PREFIXES, NAME_SUFFIXES, ratio_nickname_match
 
+def capitalize_name(name):
+    """Properly capitalize name parts, preserving internal casing"""
+    if not name:
+        return name
+
+    def cap_part(part):
+        # Handle hyphenated names
+        if "-" in part:
+            return "-".join(cap_part(p) for p in part.split("-"))
+        # Handle suffixes
+        if part.upper() in NAME_SUFFIXES:
+            return part.upper()
+        # Handle prefixes
+        if part.upper().rstrip(".") in NAME_PREFIXES:
+            return part.upper()
+        # Handle particles
+        if part.lower() in NAME_PARTICLES:
+            return part.lower()
+        # Smart capitalization: only force first letter to upper, preserve rest
+        if len(part) > 1:
+            return part[0].upper() + part[1:]
+        return part.capitalize()
+
+    return " ".join(cap_part(part) for part in name.split())
 
 def merge_names(name1, name2):
     """
     Merge two names preserving relative ordering and structure
     """
-
-    def capitalize_name(name):
-        """Properly capitalize name parts, preserving internal casing"""
-
-        def cap_part(part):
-            # Handle hyphenated names
-            if "-" in part:
-                return "-".join(cap_part(p) for p in part.split("-"))
-            # Handle suffixes
-            if part.upper() in NAME_SUFFIXES:
-                return part.upper()
-            # Handle prefixes
-            if part.upper().rstrip(".") in NAME_PREFIXES:
-                return part.upper()
-            # Handle particles
-            if part.lower() in NAME_PARTICLES:
-                return part.lower()
-            # Smart capitalization: only force first letter to upper, preserve rest
-            if len(part) > 1:
-                return part[0].upper() + part[1:]
-            return part.capitalize()
-
-        return " ".join(cap_part(part) for part in name.split())
 
     def normalize_name_order(name):
         """Convert 'LastName, FirstName' to 'FirstName LastName'"""

@@ -12,6 +12,7 @@ from process_name import get_contact_name  # Add this import
 import logging
 import re  # Add this import
 from process_phone import normalize_phone_list  # Add this import
+from process_name import merge_names, capitalize_name  # Add this import
 
 
 def format_phone_number(phone):
@@ -22,6 +23,12 @@ def format_phone_number(phone):
     formatted = re.sub(r'[^\d+]', ' ', phone)
     formatted = re.sub(r'\s+', ' ', formatted).strip()
     return formatted
+
+
+def deduplicate_keeping_order(items):
+    """Remove duplicates while preserving order of first occurrence."""
+    seen = set()
+    return [x for x in items if not (x in seen or seen.add(x))]
 
 
 def parse_vcard(vcf_file):
@@ -38,19 +45,32 @@ def parse_vcard(vcf_file):
                     if key == "N":  # Special handling for Name objects
                         logging.debug(f"Processing Name field: {field}")
                         if hasattr(field, "value"):
+                            # First unescape any escaped commas
+                            family = str(field.value.family).replace("\\,", ",").strip()
+                            given = str(field.value.given).replace("\\,", ",").strip()
+                            additional = str(field.value.additional).replace("\\,", ",").strip()
+                            prefix = str(field.value.prefix).replace("\\,", ",").strip()
+                            suffix = str(field.value.suffix).replace("\\,", ",").strip()
+                            
+                            # Split and normalize each part that contains commas
+                            if "," in given:
+                                given = merge_names(*[p.strip() for p in given.split(",")])
+                            if "," in family:
+                                family = merge_names(*[p.strip() for p in family.split(",")])
+                            
+                            # Construct the full name in proper order
                             name_parts = []
-                            # Extract available name components
-                            if field.value.family:
-                                name_parts.append(str(field.value.family))
-                            if field.value.given:
-                                name_parts.append(str(field.value.given))
-                            if field.value.additional:
-                                name_parts.append(str(field.value.additional))
-                            if field.value.prefix:
-                                name_parts.append(str(field.value.prefix))
-                            if field.value.suffix:
-                                name_parts.append(str(field.value.suffix))
+                            if prefix: name_parts.append(prefix)
+                            if given: name_parts.append(given)
+                            if additional: name_parts.append(additional)
+                            if family: name_parts.append(family)
+                            if suffix: name_parts.append(suffix)
+                            
                             contact[label] = " ".join(filter(None, name_parts))
+                            
+                            # Also set FirstName and LastName
+                            contact["FirstName"] = given
+                            contact["LastName"] = family
                     elif key == "ADR":  # Special handling for Address objects
                         logging.debug(f"Processing Address field: {field}")
                         if isinstance(field, list):
@@ -152,6 +172,16 @@ def parse_vcard(vcf_file):
                 contact["Full Name"] = pseudo_name
                 contact["Name"] = pseudo_name
                 logging.debug(f"Constructed pseudo-name: {pseudo_name}")
+            # After processing fields, deduplicate phone numbers and emails
+            if "Telephone" in contact:
+                phones = contact["Telephone"] if isinstance(contact["Telephone"], list) else [contact["Telephone"]]
+                phones = [p for p in phones if p]  # Remove empty values
+                contact["Telephone"] = deduplicate_keeping_order(phones)
+
+            if "Email" in contact:
+                emails = contact["Email"] if isinstance(contact["Email"], list) else [contact["Email"]]
+                emails = [e.lower().strip() for e in emails if e]  # Normalize emails
+                contact["Email"] = deduplicate_keeping_order(emails)
             contacts.append(contact)
             # Ensure FN and N fields are populated
             if not contact.get("Full Name"):
@@ -212,8 +242,8 @@ def save_to_csv(contacts, output_file):
                 "FirstName": contact.get("FirstName", ""),
                 "LastName": contact.get("LastName", ""),
                 "Organization": contact.get("Organization", ""),
-                "Email": contact.get("Email", ""),
-                "Telephone": "; ".join(contact.get("Telephone", [])),  # Join multiple numbers with semicolon
+                "Email": "; ".join(contact.get("Email", [])) if isinstance(contact.get("Email"), list) else contact.get("Email", ""),
+                "Telephone": "; ".join(contact.get("Telephone", [])) if isinstance(contact.get("Telephone"), list) else contact.get("Telephone", ""),
                 "Birthday": contact.get("Birthday", ""),
                 "Match Confidence": contact.get("Match Confidence", ""),
                 # Add address fields directly from contact
@@ -261,35 +291,73 @@ def save_to_vcf(contacts, output_file):
         for contact in contacts:
             try:
                 vcard = vobject.vCard()
-
-                # Required properties
                 vcard.add("version").value = "4.0"
                 vcard.add("prodid").value = "-//Your Organization//Contact Manager//EN"
 
-                # Name handling
-                vcard.add("n")
-                vcard.n.value = vobject.vcard.Name(
-                    family=contact.get("LastName", ""),
-                    given=contact.get("FirstName", ""),
-                    additional=contact.get("MiddleName", ""),
-                    prefix=contact.get("NamePrefix", ""),
-                    suffix=contact.get("NameSuffix", ""),
-                )
-                vcard.add("fn").value = contact.get("Full Name", "Unknown")
+                # Name handling - normalize before saving
+                full_name = contact.get("Full Name", "").replace("\\,", ",")
+                if "," in full_name:
+                    # Handle cases where name contains commas
+                    parts = [p.strip() for p in full_name.split(",")]
+                    full_name = merge_names(*parts)
 
-                # Email handling
+                # Set FN (formatted name)
+                vcard.add("fn").value = capitalize_name(full_name) if full_name else "Unknown"
+
+                # Handle structured name (N property)
+                vcard.add("n")
+                
+                # Get FirstName and LastName, either from contact or by splitting full name
+                given = contact.get("FirstName", "").replace("\\,", ",")
+                family = contact.get("LastName", "").replace("\\,", ",")
+                
+                # If we don't have FirstName/LastName, split full name
+                if not (given and family) and full_name:
+                    name_parts = full_name.split()
+                    if len(name_parts) >= 2:
+                        given = " ".join(name_parts[:-1])
+                        family = name_parts[-1]
+                    else:
+                        given = full_name
+                        family = ""
+
+                # Clean up any duplicates in given/family names
+                if "," in given:
+                    given = merge_names(*[p.strip() for p in given.split(",")])
+                if "," in family:
+                    family = merge_names(*[p.strip() for p in family.split(",")])
+
+                # Ensure no part of the family name appears in given name
+                if family and given:
+                    given_parts = given.split()
+                    given_parts = [p for p in given_parts if p not in family.split()]
+                    given = " ".join(given_parts)
+
+                vcard.n.value = vobject.vcard.Name(
+                    family=family,
+                    given=given,
+                    additional="",
+                    prefix="",
+                    suffix=""
+                )
+
+                # Email handling - preserve multiple emails
                 emails = contact.get("Email", [])
                 if not isinstance(emails, list):
                     emails = [emails] if emails else []
+                emails = deduplicate_keeping_order([e for e in emails if e])
                 for email in emails:
                     if email:
                         email_field = vcard.add("email")
                         email_field.value = email
                         email_field.params["TYPE"] = ["INTERNET"]
 
-                # Phone handling
+                # Phone handling - preserve multiple numbers
                 phones = contact.get("Telephone", [])
-                formatted_phones = [format_phone_number(phone) for phone in phones if phone]
+                if not isinstance(phones, list):
+                    phones = [phones] if phones else []
+                phones = deduplicate_keeping_order([p for p in phones if p])
+                formatted_phones = [format_phone_number(phone) for phone in phones]
                 for phone in formatted_phones:
                     if phone:
                         tel = vcard.add("tel")
