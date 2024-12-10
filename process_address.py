@@ -4,23 +4,24 @@ from dotenv import load_dotenv
 import os
 import requests
 from enum import Enum
+import pycountry  # Add this import at the top
 
 # Configure logging first, before any other operations
 logging.basicConfig(
     level=logging.DEBUG,  # Set to DEBUG to see all messages
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(),  # Console handler
-        logging.FileHandler('address_validation.log', mode='w')  # File handler, 'w' mode overwrites the file each run
-    ]
+        logging.FileHandler(
+            "address_validation.log", mode="w"
+        ),  # File handler, 'w' mode overwrites the file each run
+    ],
 )
 
 # Test logging is working
 logging.info("=== Address Validation Script Started ===")
 logging.debug("Debug logging is enabled")
-
-from enum import Enum
 
 
 class AddressValidationMode(Enum):
@@ -64,17 +65,15 @@ def format_vcard_address(components):
         },
         "metadata": {
             "isBusiness": components.get("isBusiness", False),
-            "addressComplete": components.get("addressComplete", False)
+            "addressComplete": components.get("addressComplete", False),
         },
-        "_AddressValidation": {
-            "verdict": components.get("verdict", "UNPROCESSED")
-        }
+        "_AddressValidation": {"verdict": components.get("verdict", "UNPROCESSED")},
     }
-    
+
     # Preserve original address if provided
     if "OriginalAddress" in components:
         result["OriginalAddress"] = components["OriginalAddress"]
-        
+
     return result
 
 
@@ -96,7 +95,9 @@ def string_to_address_dict(address_str):
 
 
 def normalize_address(address, api_key, validation_mode=AddressValidationMode.FULL):
-    logging.debug(f"normalize_address called with address: {address}, validation_mode: {validation_mode}")
+    logging.debug(
+        f"normalize_address called with address: {address}, validation_mode: {validation_mode}"
+    )
 
     if not address:
         logging.debug("No address provided, returning empty formatted address.")
@@ -144,65 +145,55 @@ def normalize_address(address, api_key, validation_mode=AddressValidationMode.FU
     )
     logging.debug(f"Raw address for validation: {raw_address}")
 
-    validation_result = validate_address(raw_address, api_key)
+    # Extract country for region code
+    country = address["vcard"].get("country", "")
+
+    validation_result = validate_address(
+        raw_address, api_key, country=country if country else None
+    )
     logging.debug(f"Validation result: {validation_result}")
 
-    if not validation_result:
-        logging.debug("Validation failed, using original address components.")
-        # Validation failed
-        logging.debug("Validation failed or returned None")
-        # Use the original address components if available
-        original_vcard = address.get("vcard", {})
-        components = {
-            "po_box": original_vcard.get("po_box", ""),
-            "extended": original_vcard.get("extended", ""),
-            "street": original_vcard.get("street", ""),
-            "city": original_vcard.get("locality", ""),
-            "region": original_vcard.get("region", ""),
-            "postal_code": original_vcard.get("postal_code", ""),
-            "country": original_vcard.get("country", ""),
-            "isBusiness": False,
-            "addressComplete": False,
-            "verdict": "VALIDATION_FAILED"
-        }
-        verdict = components["verdict"]
-    else:
-        logging.debug("Validation successful, processing validation result.")
-        components = {
-            "street": "",
-            "house_number": "",
-            "city": "",
-            "postal_code": "",
-            "country": "",
-            "isBusiness": validation_result.get("isBusiness", False),
-            "addressComplete": validation_result.get("addressComplete", False),
-            "verdict": validation_result.get("verdict", "UNKNOWN"),
-        }
-        
-        # Process address components
-        address_components = validation_result.get("addressComponents", [])
-        for component in address_components:
-            component_type = component.get("componentType", "")
-            component_name = component.get("componentName", {}).get("text", "").strip()
-            if not component_name:
-                continue
-                
-            if component_type == "route":
-                components["street"] = component_name
-            elif component_type == "street_number":
-                components["house_number"] = component_name
-            elif component_type == "locality":
-                components["city"] = component_name
-            elif component_type == "postal_code":
-                components["postal_code"] = component_name
-            elif component_type == "country":
-                components["country"] = component_name
+    if not validation_result or not validation_result.get("addressComponents"):
+        logging.debug("No validation matches found, using original address.")
+        # Use the original address
+        return address
 
-        # Only combine street and house number if both exist
-        if components["street"] and components["house_number"]:
-            components["street"] = f"{components['street']} {components['house_number']}"
-        
-        verdict = validation_result.get("verdict", "UNKNOWN")
+    logging.debug("Validation successful, processing validation result.")
+    components = {
+        "street": "",
+        "house_number": "",
+        "city": "",
+        "postal_code": "",
+        "country": "",
+        "isBusiness": validation_result.get("isBusiness", False),
+        "addressComplete": validation_result.get("addressComplete", False),
+        "verdict": validation_result.get("verdict", "UNKNOWN"),
+    }
+
+    # Process address components
+    address_components = validation_result.get("addressComponents", [])
+    for component in address_components:
+        component_type = component.get("componentType", "")
+        component_name = component.get("componentName", {}).get("text", "").strip()
+        if not component_name:
+            continue
+
+        if component_type == "route":
+            components["street"] = component_name
+        elif component_type == "street_number":
+            components["house_number"] = component_name
+        elif component_type == "locality":
+            components["city"] = component_name
+        elif component_type == "postal_code":
+            components["postal_code"] = component_name
+        elif component_type == "country":
+            components["country"] = component_name
+
+    # Only combine street and house number if both exist
+    if components["street"] and components["house_number"]:
+        components["street"] = f"{components['street']} {components['house_number']}"
+
+    verdict = validation_result.get("verdict", "UNKNOWN")
 
     logging.debug(f"Final components used for formatted address: {components}")
     result = format_vcard_address(components)
@@ -222,11 +213,28 @@ def clean_address_string(address):
     return address
 
 
-def validate_address(address, api_key):
+def validate_address(address, api_key, country=None):
     if not address or not api_key:
         logging.error("Missing address or API key")
         return None
-        
+
+    # Determine region code based on country
+    if country:
+        try:
+            region = pycountry.countries.lookup(country).alpha_2
+        except LookupError:
+            logging.warning(
+                f"Unrecognized country '{country}', proceeding without region code"
+            )
+            region = None
+    else:
+        region = None  # Do not assume a default region
+
+    if region:
+        logging.debug(f"Using region code: {region}")
+    else:
+        logging.debug("No region code provided")
+
     logging.debug(f"Requesting address validation for: {address}")
     try:
         url = "https://addressvalidation.googleapis.com/v1:validateAddress"
@@ -234,27 +242,36 @@ def validate_address(address, api_key):
         request_body = {
             "address": {
                 "addressLines": [address],
-                "regionCode": "DE"  # Consider making this configurable
             }
         }
-        
+        if region:
+            request_body["address"][
+                "regionCode"
+            ] = region  # Include only if region is specified
+
         print(f"DEBUG: API Request URL: {url}")
         print(f"DEBUG: Request body: {request_body}")
-        
-        response = requests.post(f"{url}?key={api_key}", headers=headers, json=request_body)
-        
+
+        response = requests.post(
+            f"{url}?key={api_key}", headers=headers, json=request_body
+        )
+
         print(f"DEBUG: API Response status: {response.status_code}")
-        print(f"DEBUG: API Response content: {response.text[:500]}...")  # First 500 chars
-        
+        print(
+            f"DEBUG: API Response content: {response.text[:500]}..."
+        )  # First 500 chars
+
         if not response.ok:
-            logging.error(f"API request failed: {response.status_code} - {response.text}")
+            logging.error(
+                f"API request failed: {response.status_code} - {response.text}"
+            )
             return None
 
         validation_response = response.json()
         result = validation_response.get("result", {})
-        
+
         print(f"DEBUG: Parsed response result: {result}")
-        
+
         if not result or not result.get("address"):
             logging.error("Invalid API response structure")
             return None
@@ -271,10 +288,16 @@ def validate_address(address, api_key):
             "addressComplete": result.get("verdict", {}).get("addressComplete", False),
             "addressComponents": result.get("address", {}).get("addressComponents", []),
             "isBusiness": result.get("metadata", {}).get("business", False),
-            "verdict": result.get("verdict", {}).get("validationGranularity", "UNKNOWN"),
+            "verdict": result.get("verdict", {}).get(
+                "validationGranularity", "UNKNOWN"
+            ),
             "confirmationLevels": confirmation_levels,
-            "unconfirmedComponents": result.get("address", {}).get("unconfirmedComponentTypes", []),
-            "missingComponents": result.get("address", {}).get("missingComponentTypes", [])
+            "unconfirmedComponents": result.get("address", {}).get(
+                "unconfirmedComponentTypes", []
+            ),
+            "missingComponents": result.get("address", {}).get(
+                "missingComponentTypes", []
+            ),
         }
 
     except Exception as e:
@@ -291,7 +314,7 @@ def parse_address_string(address_str):
         "country": "",
         "isBusiness": False,
         "addressComplete": False,
-        "verdict": "PARSED"
+        "verdict": "PARSED",
     }
 
     # Clean the address string
@@ -307,7 +330,7 @@ def parse_address_string(address_str):
         # Try to find postal code and city
         if parts:
             last_part = parts.pop()
-            if re.search(r'\d{5}', last_part):
+            if re.search(r"\d{5}", last_part):
                 components["postal_code"] = last_part
                 if parts:
                     components["city"] = parts.pop()
@@ -317,3 +340,15 @@ def parse_address_string(address_str):
         components["street"] = ", ".join(parts) if parts else ""
 
     return components
+
+
+def clean_address(address):
+    """Remove line breaks and extra spaces from address."""
+    if not address:
+        return address
+    return ' '.join(address.split()).replace('\\n', ' ').strip()
+
+# ...existing code...
+
+# Example usage within parsing functions
+# address = clean_address(raw_address)

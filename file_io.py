@@ -5,10 +5,23 @@
 import csv
 from config import VCARD_FIELD_MAPPING
 import vobject
-from process_address import string_to_address_dict  # Add this import
+
+# from process_address import string_to_address_dict  # Add this import
 import os  # Add this import
 from process_name import get_contact_name  # Add this import
 import logging
+import re  # Add this import
+from process_phone import normalize_phone_list  # Add this import
+
+
+def format_phone_number(phone):
+    """Format phone numbers to have spaces between groups and remove non-standard separators."""
+    if not phone:
+        return phone
+    # Replace non-digit characters with space, then collapse multiple spaces
+    formatted = re.sub(r'[^\d+]', ' ', phone)
+    formatted = re.sub(r'\s+', ' ', formatted).strip()
+    return formatted
 
 
 def parse_vcard(vcf_file):
@@ -44,35 +57,54 @@ def parse_vcard(vcf_file):
                             addresses = []
                             for addr in field:
                                 if hasattr(addr, "value"):
-                                    logging.debug(f"Processing Address value: {addr.value}")
+                                    logging.debug(
+                                        f"Processing Address value: {addr.value}"
+                                    )
                                     # Split multiline addresses properly
-                                    street_parts = str(addr.value[2] or "").split('\n')
-                                    street_address = ' '.join(filter(None, street_parts))
-                                    
+                                    street_parts = str(addr.value[2] or "").split("\n")
+                                    street_address = " ".join(
+                                        filter(None, street_parts)
+                                    )
+
                                     addr_dict = {
                                         "vcard": {
                                             "po_box": str(addr.value[0] or "").strip(),
-                                            "extended": str(addr.value[1] or "").strip(),
+                                            "extended": str(
+                                                addr.value[1] or ""
+                                            ).strip(),
                                             "street": street_address.strip(),
-                                            "locality": str(addr.value[3] or "").strip(),
+                                            "locality": str(
+                                                addr.value[3] or ""
+                                            ).strip(),
                                             "region": str(addr.value[4] or "").strip(),
-                                            "postal_code": str(addr.value[5] or "").strip(),
+                                            "postal_code": str(
+                                                addr.value[5] or ""
+                                            ).strip(),
                                             "country": str(addr.value[6] or "").strip(),
                                         },
-                                        "OriginalAddress": ", ".join(filter(None, map(str, addr.value))),
-                                        "_AddressValidation": {"verdict": "UNPROCESSED"},
-                                        "metadata": {"isBusiness": False, "addressComplete": False}
+                                        "OriginalAddress": ", ".join(
+                                            filter(None, map(str, addr.value))
+                                        ),
+                                        "_AddressValidation": {
+                                            "verdict": "UNPROCESSED"
+                                        },
+                                        "metadata": {
+                                            "isBusiness": False,
+                                            "addressComplete": False,
+                                        },
                                     }
                                     logging.debug(f"Address dict: {addr_dict}")
                                     # Create formatted label
                                     label_parts = [
-                                        p for p in [
+                                        p
+                                        for p in [
                                             addr_dict["vcard"]["street"],
                                             addr_dict["vcard"]["locality"],
                                             addr_dict["vcard"]["region"],
                                             addr_dict["vcard"]["postal_code"],
-                                            addr_dict["vcard"]["country"]
-                                        ] if p
+                                            addr_dict["vcard"]["country"],
+                                        ]
+                                        if p
                                     ]
                                     addr_dict["vcard"]["label"] = ", ".join(label_parts)
                                     addresses.append(addr_dict)
@@ -89,9 +121,15 @@ def parse_vcard(vcf_file):
                             str(field.value) if hasattr(field, "value") else str(field)
                         )
             # After processing all fields
-            if 'Address' in contact and contact['Address']:
+            if "Address" in contact and contact["Address"]:
                 logging.debug(f"Contact has address: {contact['Address']}")
-            name_fields = ["Full Name", "Name", "FirstName", "LastName", "Structured Name"]
+            name_fields = [
+                "Full Name",
+                "Name",
+                "FirstName",
+                "LastName",
+                "Structured Name",
+            ]
             if not any(contact.get(field) for field in name_fields):
                 logging.debug("No name fields populated, constructing a pseudo-name.")
                 # Construct pseudo-name from available fields
@@ -115,6 +153,23 @@ def parse_vcard(vcf_file):
                 contact["Name"] = pseudo_name
                 logging.debug(f"Constructed pseudo-name: {pseudo_name}")
             contacts.append(contact)
+            # Ensure FN and N fields are populated
+            if not contact.get("Full Name"):
+                contact["Full Name"] = contact.get("Name", "Unknown")
+            if not contact.get("Name"):
+                contact["Name"] = contact.get("Full Name", "Unknown")
+            # Address handling - remove line breaks
+            if "Address" in contact and contact["Address"]:
+                addresses = contact["Address"]
+                if isinstance(addresses, list):
+                    for addr in addresses:
+                        original = addr.get("OriginalAddress", "")
+                        addr["OriginalAddress"] = original.replace("\n", " ").strip()
+            # Normalize Telephone to ensure it's a flat list of strings
+            telephone = contact.get("Telephone", [])
+            if not isinstance(telephone, list):
+                telephone = [telephone] if telephone else []
+            contact["Telephone"] = normalize_phone_list(telephone)
     logging.info(f"Total contacts parsed from {vcf_file}: {len(contacts)}")
     return contacts
 
@@ -158,7 +213,7 @@ def save_to_csv(contacts, output_file):
                 "LastName": contact.get("LastName", ""),
                 "Organization": contact.get("Organization", ""),
                 "Email": contact.get("Email", ""),
-                "Telephone": contact.get("Telephone", ""),
+                "Telephone": "; ".join(contact.get("Telephone", [])),  # Join multiple numbers with semicolon
                 "Birthday": contact.get("Birthday", ""),
                 "Match Confidence": contact.get("Match Confidence", ""),
                 # Add address fields directly from contact
@@ -177,22 +232,118 @@ def save_to_csv(contacts, output_file):
             if addresses:
                 addr = addresses[0] if isinstance(addresses, list) else addresses
                 if isinstance(addr, dict):  # Ensure we have a dictionary
-                    vcard_addr = addr.get('vcard', {})
-                    
+                    vcard_addr = addr.get("vcard", {})
+
                     # Map address components to CSV fields
-                    row.update({
-                        'ADR_POBox': vcard_addr.get('po_box', '').strip(),
-                        'ADR_Extended': vcard_addr.get('extended', '').strip(),
-                        'ADR_Street': vcard_addr.get('street', '').strip(),
-                        'ADR_Locality': vcard_addr.get('locality', '').strip(),
-                        'ADR_Region': vcard_addr.get('region', '').strip(),
-                        'ADR_PostalCode': vcard_addr.get('postal_code', '').strip(),
-                        'ADR_Country': vcard_addr.get('country', '').strip(),
-                        'ADR_Label': vcard_addr.get('label', '').strip()
-                    })
+                    row.update(
+                        {
+                            "ADR_POBox": vcard_addr.get("po_box", "").strip(),
+                            "ADR_Extended": vcard_addr.get("extended", "").strip(),
+                            "ADR_Street": vcard_addr.get("street", "").strip(),
+                            "ADR_Locality": vcard_addr.get("locality", "").strip(),
+                            "ADR_Region": vcard_addr.get("region", "").strip(),
+                            "ADR_PostalCode": vcard_addr.get("postal_code", "").strip(),
+                            "ADR_Country": vcard_addr.get("country", "").strip(),
+                            "ADR_Label": vcard_addr.get("label", "").strip(),
+                        }
+                    )
 
             logging.debug(f"Writing contact to CSV: {row}")
             writer.writerow(row)
+    logging.info(f"Contacts saved to {output_file}")
+
+
+def save_to_vcf(contacts, output_file):
+    """Save contacts to VCF file according to vCard 4.0 spec (RFC 6350)"""
+    logging.debug(f"Saving contacts to VCF: {output_file}")
+
+    with open(output_file, "w", encoding="utf-8") as vcf_file:
+        for contact in contacts:
+            try:
+                vcard = vobject.vCard()
+
+                # Required properties
+                vcard.add("version").value = "4.0"
+                vcard.add("prodid").value = "-//Your Organization//Contact Manager//EN"
+
+                # Name handling
+                vcard.add("n")
+                vcard.n.value = vobject.vcard.Name(
+                    family=contact.get("LastName", ""),
+                    given=contact.get("FirstName", ""),
+                    additional=contact.get("MiddleName", ""),
+                    prefix=contact.get("NamePrefix", ""),
+                    suffix=contact.get("NameSuffix", ""),
+                )
+                vcard.add("fn").value = contact.get("Full Name", "Unknown")
+
+                # Email handling
+                emails = contact.get("Email", [])
+                if not isinstance(emails, list):
+                    emails = [emails] if emails else []
+                for email in emails:
+                    if email:
+                        email_field = vcard.add("email")
+                        email_field.value = email
+                        email_field.params["TYPE"] = ["INTERNET"]
+
+                # Phone handling
+                phones = contact.get("Telephone", [])
+                formatted_phones = [format_phone_number(phone) for phone in phones if phone]
+                for phone in formatted_phones:
+                    if phone:
+                        tel = vcard.add("tel")
+                        tel.value = phone
+                        tel.params["TYPE"] = ["VOICE"]
+
+                # Address handling - fixed to use vobject.vcard.Address
+                if any(
+                    contact.get(f"ADR_{field}")
+                    for field in [
+                        "POBox",
+                        "Extended",
+                        "Street",
+                        "Locality",
+                        "Region",
+                        "PostalCode",
+                        "Country",
+                    ]
+                ):
+                    vcard_addr = vcard.add("adr")
+                    vcard_addr.value = vobject.vcard.Address(
+                        box=contact.get("ADR_POBox", ""),
+                        extended=contact.get("ADR_Extended", ""),
+                        street=contact.get("ADR_Street", ""),
+                        city=contact.get("ADR_Locality", ""),
+                        region=contact.get("ADR_Region", ""),
+                        code=contact.get("ADR_PostalCode", ""),
+                        country=contact.get("ADR_Country", ""),
+                    )
+
+                    # Add LABEL parameter if present
+                    if contact.get("ADR_Label"):
+                        label = contact["ADR_Label"].replace("\n", "\\n")
+                        vcard_addr.params["LABEL"] = [label]
+
+                    # Add TYPE parameter
+                    vcard_addr.params["TYPE"] = (
+                        ["WORK"] if contact.get("ADR_IsBusiness") else ["HOME"]
+                    )
+
+                    # Add PREF parameter if it's the preferred address
+                    if contact.get("ADR_Complete"):
+                        vcard_addr.params["PREF"] = ["1"]
+
+                # Write the vCard
+                vcf_file.write(vcard.serialize())
+
+            except Exception as e:
+                logging.error(
+                    f"Error processing contact: {contact.get('Full Name', 'Unknown')}"
+                )
+                logging.error(f"Error details: {str(e)}")
+                continue
+
     logging.info(f"Contacts saved to {output_file}")
 
 
@@ -238,3 +389,4 @@ def save_address_validation_report(contacts, output_file):
                         metadata.get("addressComplete", False),
                     ]
                 )
+

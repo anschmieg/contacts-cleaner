@@ -11,7 +11,7 @@ from process_address import (
     AddressValidationMode,
     string_to_address_dict,  # Add this import
 )
-from process_name import get_contact_name, merge_names
+from process_name import get_contact_name, merge_names, generate_pseudo_name
 from process_phone import (
     # any_phones_match,
     are_phones_matching,
@@ -85,97 +85,22 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
     for duplicate in duplicates:
         for key in all_names.keys():
             if key in duplicate and duplicate[key]:
-                value = str(duplicate[key]).strip()
-                if value:
-                    all_names[key].add(value)
+                all_names[key].add(duplicate[key])
 
     # Regular merge process with modified name handling
     for duplicate in duplicates:
         for key, value in duplicate.items():
             if not value or str(value).strip() == "":
-                continue
+                continue  # Skip empty fields
 
             value = str(value).strip()
             if key in merged_contact:
-                if key in [
-                    "Full Name",
-                    "FirstName",
-                    "LastName",
-                    "Name",
-                    "Structured Name",
-                ]:
-                    # Skip if value is already included
-                    if value not in all_names[key]:
-                        all_names[key].add(value)
-                        merged_contact[key] = ", ".join(filter(None, all_names[key]))
-                elif key == "Telephone":
-                    # Enhanced phone number handling
-                    existing_phones = normalize_phone_list(merged_contact[key])
-                    new_phones = normalize_phone_list(value)
-
-                    # Only add non-matching phones
-                    for new_phone in new_phones:
-                        if not any(
-                            are_phones_matching(new_phone, existing)
-                            for existing in existing_phones
-                        ):
-                            existing_phones.append(new_phone)  # Added missing code
-
-                    merged_contact[key] = ", ".join(existing_phones)
-                elif key == "Address":
-                    # Handle multiple addresses
-                    if isinstance(value, list):
-                        addresses = value
-                    else:
-                        addresses = [value]
-
-                    for addr in addresses:
-                        if isinstance(addr, str):
-                            normalized_addr = normalize_address(addr, api_key, validation_mode)
-                            new_addr = normalized_addr
-                        else:
-                            new_addr = addr
-
-                        # Check if this address is already in the list
-                        addr_label = new_addr.get("vcard", {}).get("label", "")
-                        if not any(existing.get("vcard", {}).get("label") == addr_label
-                                   for existing in merged_contact["Address"]):
-                            merged_contact["Address"].append(new_addr)  # Added missing code
+                if isinstance(merged_contact[key], list):
+                    merged_contact[key].append(value)
                 else:
-                    # ...existing handling for other fields...
-                    if len(value) > len(merged_contact[key]):
-                        merged_contact[key] = value
-                    elif (
-                        "," in value
-                        or merged_contact[key] in value
-                        or value in merged_contact[key]
-                    ):
-                        existing = merged_contact[key].split(", ")
-                        new = value.split(", ")
-                        merged_contact[key] = ", ".join(
-                            existing + [v for v in new if v not in existing]
-                        )
-                    else:
-                        if key in ["Full Name", "Structured Name", "Name"]:
-                            merged_contact[key] = merge_names(
-                                merged_contact[key], value
-                            )
+                    merged_contact[key] = [merged_contact[key], value]
             else:
-                if key in [
-                    "Full Name",
-                    "FirstName",
-                    "LastName",
-                    "Name",
-                    "Structured Name",
-                ]:
-                    all_names[key].add(value)
-                    merged_contact[key] = value
-                elif key == "Address":
-                    merged_contact[key] = normalize_address(
-                        value, api_key, validation_mode
-                    )
-                else:
-                    merged_contact[key] = value
+                merged_contact[key] = value
 
         # Collect confidence scores for the merged contact
         match_details = is_duplicate_with_confidence(duplicates[0], duplicate)
@@ -185,6 +110,14 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
     for key in all_names.keys():
         if all_names[key]:
             merged_contact[key] = ", ".join(filter(None, all_names[key]))
+
+    # Normalize Telephone to be a flat list of strings
+    if "Telephone" in merged_contact:
+        merged_contact["Telephone"] = normalize_phone_list(
+            merged_contact["Telephone"]
+            if isinstance(merged_contact["Telephone"], list)
+            else [merged_contact["Telephone"]]
+        )
 
     # Calculate overall confidence for the merged contact using geometric mean
     merged_contact["Match Confidence"] = (
@@ -414,69 +347,71 @@ def string_similarity(s1: str, s2: str) -> float:
     return SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
 
 
-def calculate_match_confidence(contact1: Dict[str, Any], contact2: Dict[str, Any]) -> float:
+def calculate_match_confidence(
+    contact1: Dict[str, Any], contact2: Dict[str, Any]
+) -> float:
     """
     Calculate match confidence between two contacts using weighted scoring.
     Returns a float between 0.0 and 1.0
     """
     score = 0.0
     weights = {
-        'email': 1.0,
-        'full_name': 1.0,
-        'first_last': 0.9,
-        'last_name': 0.6,
-        'first_name': 0.4,
-        'organization': 0.3,
-        'street': 0.3,
-        'city': 0.2,
-        'postal_code': 0.3,
-        'country': 0.1
+        "email": 1.0,
+        "full_name": 1.0,
+        "first_last": 0.9,
+        "last_name": 0.6,
+        "first_name": 0.4,
+        "organization": 0.3,
+        "street": 0.3,
+        "city": 0.2,
+        "postal_code": 0.3,
+        "country": 0.1,
     }
 
     # Email comparison (exact match)
-    if contact1.get('Email') and contact2.get('Email'):
-        if contact1['Email'].lower() == contact2['Email'].lower():
-            score += weights['email']
+    if contact1.get("Email") and contact2.get("Email"):
+        if contact1["Email"].lower() == contact2["Email"].lower():
+            score += weights["email"]
 
     # Name comparisons with fuzzy matching
-    full_name1 = contact1.get('Full Name', '')
-    full_name2 = contact2.get('Full Name', '')
+    full_name1 = contact1.get("Full Name", "")
+    full_name2 = contact2.get("Full Name", "")
     if full_name1 and full_name2:
         similarity = string_similarity(full_name1, full_name2)
         if similarity > 0.9:
-            score += weights['full_name'] * similarity
+            score += weights["full_name"] * similarity
 
     # First + Last name comparison
-    first1 = contact1.get('FirstName', '')
-    first2 = contact2.get('FirstName', '')
-    last1 = contact1.get('LastName', '')
-    last2 = contact2.get('LastName', '')
-    
+    first1 = contact1.get("FirstName", "")
+    first2 = contact2.get("FirstName", "")
+    last1 = contact1.get("LastName", "")
+    last2 = contact2.get("LastName", "")
+
     if first1 and first2 and last1 and last2:
         first_sim = string_similarity(first1, first2)
         last_sim = string_similarity(last1, last2)
         if first_sim > 0.8 and last_sim > 0.8:
-            score += weights['first_last'] * ((first_sim + last_sim) / 2)
+            score += weights["first_last"] * ((first_sim + last_sim) / 2)
 
     # Organization comparison
-    org1 = contact1.get('Organization', '')
-    org2 = contact2.get('Organization', '')
+    org1 = contact1.get("Organization", "")
+    org2 = contact2.get("Organization", "")
     if org1 and org2:
         org_sim = string_similarity(org1, org2)
         if org_sim > 0.8:
-            score += weights['organization'] * org_sim
+            score += weights["organization"] * org_sim
 
     # Address components comparison
     addr_components = [
-        ('ADR_Street', 'street'),
-        ('ADR_Locality', 'city'),
-        ('ADR_PostalCode', 'postal_code'),
-        ('ADR_Country', 'country')
+        ("ADR_Street", "street"),
+        ("ADR_Locality", "city"),
+        ("ADR_PostalCode", "postal_code"),
+        ("ADR_Country", "country"),
     ]
 
     for addr_field, weight_key in addr_components:
-        val1 = contact1.get(addr_field, '')
-        val2 = contact2.get(addr_field, '')
+        val1 = contact1.get(addr_field, "")
+        val2 = contact2.get(addr_field, "")
         if val1 and val2:
             similarity = string_similarity(val1, val2)
             if similarity > 0.8:
@@ -497,6 +432,15 @@ def split_full_name(full_name):
     elif len(parts) >= 2:
         return " ".join(parts[:-1]), parts[-1]
     return "", ""
+
+
+def validate_contact(contact):
+    """Ensure FN and N fields are populated."""
+    if not contact.get("Full Name"):
+        contact["Full Name"] = generate_pseudo_name(contact)
+    if not contact.get("Name"):
+        contact["Name"] = contact.get("Full Name", "Unknown")
+    return contact
 
 
 def process_contact(contact, validation_mode=AddressValidationMode.FULL):
@@ -522,15 +466,21 @@ def process_contact(contact, validation_mode=AddressValidationMode.FULL):
             if isinstance(contact.get("Organization", []), list)
             else contact.get("Organization", "").strip("[]'\"")
         ),
-        "Email": ", ".join(contact.get("Email", [])) if isinstance(contact.get("Email", []), list) else contact.get("Email", ""),
-        "Phone": contact.get("Phone", []),
+        "Email": (
+            ", ".join(contact.get("Email", []))
+            if isinstance(contact.get("Email", []), list)
+            else contact.get("Email", "")
+        ),
+        "Telephone": contact.get("Telephone", []),  # Changed from "Phone" to "Telephone"
         "Birthday": contact.get("Birthday", ""),
     }
 
     # Before processing the address
     if "Address" in contact and contact["Address"]:
         # Log only address-related fields
-        logging.debug(f"Processing address for contact: {contact.get('Name', 'Unknown')}")
+        logging.debug(
+            f"Processing address for contact: {contact.get('Name', 'Unknown')}"
+        )
         logging.debug(f"Original address: {contact['Address']}")
 
         address = contact["Address"]
@@ -559,9 +509,9 @@ def process_contact(contact, validation_mode=AddressValidationMode.FULL):
                 "ADR_IsBusiness": metadata.get("isBusiness", False),
                 "ADR_Complete": metadata.get("addressComplete", False),
                 "ADR_Original": normalized_address.get("OriginalAddress", ""),
-                "ADR_ValidationVerdict": normalized_address.get("_AddressValidation", {}).get(
-                    "verdict", ""
-                ),
+                "ADR_ValidationVerdict": normalized_address.get(
+                    "_AddressValidation", {}
+                ).get("verdict", ""),
             }
         )
 
@@ -571,15 +521,5 @@ def process_contact(contact, validation_mode=AddressValidationMode.FULL):
     logging.debug(f"Processed contact: {processed}")
     return processed
 
-# Reconstruct missing utility functions
-
-def get_contact_name(contact):
-    """Retrieve the contact's name."""
-    return contact.get("Full Name") or contact.get("Name") or "Unknown"
-
-def merge_names(name1, name2):
-    """Merge two names into one, avoiding duplicates."""
-    names = set(name.strip() for name in [name1, name2] if name)
-    return ", ".join(names)
-
-# ...existing code...
+    logging.debug(f"Processed contact: {processed}")
+    return processed

@@ -5,7 +5,7 @@
 
 import os
 import argparse
-from file_io import parse_vcard, save_to_csv, save_address_validation_report
+from file_io import parse_vcard, save_to_csv, save_to_vcf, save_address_validation_report
 from process_contact import process_contact, merge_duplicates
 from validation import generate_merge_validation
 from process_address import AddressValidationMode
@@ -55,7 +55,7 @@ def main(input_paths, validation_mode=AddressValidationMode.FULL):
     for contact in all_contacts:
         processed = process_contact(contact, validation_mode)
         processed_contacts.append(processed)
-    
+
     all_contacts = processed_contacts
 
     # Keep copy of original contacts for validation
@@ -67,6 +67,7 @@ def main(input_paths, validation_mode=AddressValidationMode.FULL):
     # Save merged contacts
     output_csv = "output/merged_contacts.csv"
     save_to_csv(all_contacts, output_csv)
+    save_to_vcf(all_contacts, "output/merged_contacts.vcf")
 
     # Save address validation report
     if validation_mode != AddressValidationMode.NONE:

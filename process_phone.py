@@ -1,3 +1,6 @@
+import re
+import phonenumbers
+from phonenumbers import NumberParseException
 from config import COUNTRY_PREFIXES
 
 ###################
@@ -6,51 +9,37 @@ from config import COUNTRY_PREFIXES
 
 
 def normalize_phone(phone):
-    """Normalize phone number format without adding default country code"""
+    """Normalize individual phone number to international format."""
     if not phone:
-        return ""
-
-    # Keep track of original format before cleaning
-    had_plus = phone.startswith("+")
-    had_zeros = phone.startswith("0")
-
-    # Remove all non-digit and plus characters
-    cleaned = "".join(c for c in phone if c.isdigit() or c == "+")
-
-    if not cleaned:
-        return ""
-
-    # Handle various international formats
-    if cleaned.startswith("00"):
-        return "+" + cleaned[2:]  # Convert 00XXX to +XXX
-    elif had_plus:
-        return cleaned  # Keep existing + prefix
-    elif had_zeros:
-        return cleaned  # Keep local format if it started with zeros
-    else:
-        return cleaned  # Keep as-is without adding country code
+        return phone
+    # Replace leading '00' with '+'
+    phone = re.sub(r'^00', '+', phone)
+    try:
+        # Attempt to parse the phone number with a default region (e.g., 'DE' for Germany)
+        parsed_number = phonenumbers.parse(phone, None)
+        if not phonenumbers.is_valid_number(parsed_number):
+            return None  # Invalid number
+        # Format to E.164 standard
+        return phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.E164)
+    except NumberParseException:
+        return None  # Unable to parse number
 
 
-def normalize_phone_list(phone_str):
-    """Helper to normalize and split phone numbers"""
-    if not phone_str:
-        return []
-
-    # Split by any common separator
-    phones = []
-    for sep in [",", ";", "\n", "/", "|"]:
-        if sep in phone_str:
-            phones.extend(phone_str.split(sep))
-            break
-    else:
-        phones = [phone_str]
-
-    # Normalize each phone number
-    normalized = [normalize_phone(p.strip()) for p in phones]
-
-    # Remove duplicates while preserving order
-    seen = set()
-    return [x for x in normalized if x and not (x in seen or seen.add(x))]
+def normalize_phone_list(phones, default_region='DE'):
+    """Normalize a list of phone numbers to international format."""
+    normalized = []
+    for p in phones:
+        if isinstance(p, list):
+            for sub_p in p:
+                if isinstance(sub_p, str):
+                    normalized_number = normalize_phone(sub_p.strip())
+                    if normalized_number:
+                        normalized.append(normalized_number)
+        elif isinstance(p, str):
+            normalized_number = normalize_phone(p.strip())
+            if normalized_number:
+                normalized.append(normalized_number)
+    return normalized
 
 
 def are_phones_matching(phone1, phone2):

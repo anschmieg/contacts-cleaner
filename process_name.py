@@ -169,7 +169,19 @@ def merge_names(name1, name2):
     return capitalize_name(result)
 
 
+def generate_pseudo_name(contact):
+    """Generate a pseudo-name using available contact information."""
+    if contact.get("Email"):
+        email = contact["Email"][0] if isinstance(contact["Email"], list) else contact["Email"]
+        return email.split("@")[0].replace(".", " ").title()
+    elif contact.get("Telephone"):
+        phone = contact["Telephone"][0] if isinstance(contact["Telephone"], list) else contact["Telephone"]
+        return phone
+    elif contact.get("Organization"):
+        return contact["Organization"]
+    else:
+        return "Unknown"
+
 def get_contact_name(contact):
-    return contact.get(
-        "Full Name", contact.get("Structured Name", contact.get("Name", "")).strip()
-    )
+    """Retrieve the contact's name."""
+    return contact.get("Full Name", contact.get("Name", "Unknown"))
