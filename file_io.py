@@ -20,8 +20,8 @@ def format_phone_number(phone):
     if not phone:
         return phone
     # Replace non-digit characters with space, then collapse multiple spaces
-    formatted = re.sub(r'[^\d+]', ' ', phone)
-    formatted = re.sub(r'\s+', ' ', formatted).strip()
+    formatted = re.sub(r"[^\d+]", " ", phone)
+    formatted = re.sub(r"\s+", " ", formatted).strip()
     return formatted
 
 
@@ -48,26 +48,37 @@ def parse_vcard(vcf_file):
                             # First unescape any escaped commas
                             family = str(field.value.family).replace("\\,", ",").strip()
                             given = str(field.value.given).replace("\\,", ",").strip()
-                            additional = str(field.value.additional).replace("\\,", ",").strip()
+                            additional = (
+                                str(field.value.additional).replace("\\,", ",").strip()
+                            )
                             prefix = str(field.value.prefix).replace("\\,", ",").strip()
                             suffix = str(field.value.suffix).replace("\\,", ",").strip()
-                            
+
                             # Split and normalize each part that contains commas
                             if "," in given:
-                                given = merge_names(*[p.strip() for p in given.split(",")])
+                                given = merge_names(
+                                    *[p.strip() for p in given.split(",")]
+                                )
                             if "," in family:
-                                family = merge_names(*[p.strip() for p in family.split(",")])
-                            
+                                family = merge_names(
+                                    *[p.strip() for p in family.split(",")]
+                                )
+
                             # Construct the full name in proper order
                             name_parts = []
-                            if prefix: name_parts.append(prefix)
-                            if given: name_parts.append(given)
-                            if additional: name_parts.append(additional)
-                            if family: name_parts.append(family)
-                            if suffix: name_parts.append(suffix)
-                            
+                            if prefix:
+                                name_parts.append(prefix)
+                            if given:
+                                name_parts.append(given)
+                            if additional:
+                                name_parts.append(additional)
+                            if family:
+                                name_parts.append(family)
+                            if suffix:
+                                name_parts.append(suffix)
+
                             contact[label] = " ".join(filter(None, name_parts))
-                            
+
                             # Also set FirstName and LastName
                             contact["FirstName"] = given
                             contact["LastName"] = family
@@ -174,12 +185,20 @@ def parse_vcard(vcf_file):
                 logging.debug(f"Constructed pseudo-name: {pseudo_name}")
             # After processing fields, deduplicate phone numbers and emails
             if "Telephone" in contact:
-                phones = contact["Telephone"] if isinstance(contact["Telephone"], list) else [contact["Telephone"]]
+                phones = (
+                    contact["Telephone"]
+                    if isinstance(contact["Telephone"], list)
+                    else [contact["Telephone"]]
+                )
                 phones = [p for p in phones if p]  # Remove empty values
                 contact["Telephone"] = deduplicate_keeping_order(phones)
 
             if "Email" in contact:
-                emails = contact["Email"] if isinstance(contact["Email"], list) else [contact["Email"]]
+                emails = (
+                    contact["Email"]
+                    if isinstance(contact["Email"], list)
+                    else [contact["Email"]]
+                )
                 emails = [e.lower().strip() for e in emails if e]  # Normalize emails
                 contact["Email"] = deduplicate_keeping_order(emails)
             contacts.append(contact)
@@ -242,8 +261,16 @@ def save_to_csv(contacts, output_file):
                 "FirstName": contact.get("FirstName", ""),
                 "LastName": contact.get("LastName", ""),
                 "Organization": contact.get("Organization", ""),
-                "Email": "; ".join(contact.get("Email", [])) if isinstance(contact.get("Email"), list) else contact.get("Email", ""),
-                "Telephone": "; ".join(contact.get("Telephone", [])) if isinstance(contact.get("Telephone"), list) else contact.get("Telephone", ""),
+                "Email": (
+                    "; ".join(contact.get("Email", []))
+                    if isinstance(contact.get("Email"), list)
+                    else contact.get("Email", "")
+                ),
+                "Telephone": (
+                    "; ".join(contact.get("Telephone", []))
+                    if isinstance(contact.get("Telephone"), list)
+                    else contact.get("Telephone", "")
+                ),
                 "Birthday": contact.get("Birthday", ""),
                 "Match Confidence": contact.get("Match Confidence", ""),
                 # Add address fields directly from contact
@@ -292,7 +319,7 @@ def save_to_vcf(contacts, output_file):
             try:
                 vcard = vobject.vCard()
                 vcard.add("version").value = "4.0"
-                vcard.add("prodid").value = "-//Your Organization//Contact Manager//EN"
+                vcard.add("prodid").value = "-//github.com/anschmieg/contacts-cleaner//EN"
 
                 # Name handling - normalize before saving
                 full_name = contact.get("Full Name", "").replace("\\,", ",")
@@ -302,15 +329,17 @@ def save_to_vcf(contacts, output_file):
                     full_name = merge_names(*parts)
 
                 # Set FN (formatted name)
-                vcard.add("fn").value = capitalize_name(full_name) if full_name else "Unknown"
+                vcard.add("fn").value = (
+                    capitalize_name(full_name) if full_name else "Unknown"
+                )
 
                 # Handle structured name (N property)
                 vcard.add("n")
-                
+
                 # Get FirstName and LastName, either from contact or by splitting full name
                 given = contact.get("FirstName", "").replace("\\,", ",")
                 family = contact.get("LastName", "").replace("\\,", ",")
-                
+
                 # If we don't have FirstName/LastName, split full name
                 if not (given and family) and full_name:
                     name_parts = full_name.split()
@@ -334,11 +363,7 @@ def save_to_vcf(contacts, output_file):
                     given = " ".join(given_parts)
 
                 vcard.n.value = vobject.vcard.Name(
-                    family=family,
-                    given=given,
-                    additional="",
-                    prefix="",
-                    suffix=""
+                    family=family, given=given, additional="", prefix="", suffix=""
                 )
 
                 # Email handling - preserve multiple emails
@@ -457,4 +482,3 @@ def save_address_validation_report(contacts, output_file):
                         metadata.get("addressComplete", False),
                     ]
                 )
-

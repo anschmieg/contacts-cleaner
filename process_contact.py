@@ -3,6 +3,7 @@
 ###################
 
 import os
+import re
 from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from math import prod
@@ -14,7 +15,7 @@ from process_address import (
 from process_name import get_contact_name, merge_names, generate_pseudo_name
 from process_phone import (
     # any_phones_match,
-    are_phones_matching,
+    # are_phones_matching,
     normalize_phone_list,
 )
 import logging
@@ -71,17 +72,21 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
     # First collect and normalize all name variants
     first_names = set()
     last_names = set()
-    
+
     for duplicate in duplicates:
         # Handle FirstName and LastName fields
         if duplicate.get("FirstName"):
-            names = [n.strip() for n in duplicate["FirstName"].replace("\\,", ",").split(",")]
+            names = [
+                n.strip() for n in duplicate["FirstName"].replace("\\,", ",").split(",")
+            ]
             first_names.update(names)
-        
+
         if duplicate.get("LastName"):
-            names = [n.strip() for n in duplicate["LastName"].replace("\\,", ",").split(",")]
+            names = [
+                n.strip() for n in duplicate["LastName"].replace("\\,", ",").split(",")
+            ]
             last_names.update(names)
-            
+
         # Also process full names if available
         if duplicate.get("Full Name"):
             full = duplicate["Full Name"].replace("\\,", ",")
@@ -97,7 +102,7 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
                 if len(parts) > 1:
                     first_names.add(" ".join(parts[:-1]))
                     last_names.add(parts[-1])
-    
+
     # Merge first and last names separately
     if first_names:
         first = next(iter(first_names))
@@ -105,14 +110,14 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
             if name != first:
                 first = merge_names(first, name)
         merged_contact["FirstName"] = first
-        
+
     if last_names:
         last = next(iter(last_names))
         for name in last_names:
             if name != last:
                 last = merge_names(last, name)
         merged_contact["LastName"] = last
-    
+
     # Construct full name from merged components
     if "FirstName" in merged_contact or "LastName" in merged_contact:
         full_name_parts = []
@@ -167,11 +172,21 @@ def merge_contact_group(duplicates, validation_mode=AddressValidationMode.FULL):
 
     # Normalize Telephone to be a flat list of strings
     if "Telephone" in merged_contact:
-        merged_contact["Telephone"] = normalize_phone_list(
-            merged_contact["Telephone"]
-            if isinstance(merged_contact["Telephone"], list)
-            else [merged_contact["Telephone"]]
-        )
+        # Convert to set to remove duplicates, then back to list
+        phone_numbers = merged_contact["Telephone"]
+        if not isinstance(phone_numbers, list):
+            phone_numbers = [phone_numbers]
+            
+        # Normalize and deduplicate phone numbers
+        normalized_phones = []
+        seen_phones = set()
+        
+        for phone in normalize_phone_list(phone_numbers):
+            if phone not in seen_phones:
+                seen_phones.add(phone)
+                normalized_phones.append(phone)
+                
+        merged_contact["Telephone"] = normalized_phones
 
     # Calculate overall confidence for the merged contact using geometric mean
     merged_contact["Match Confidence"] = (
@@ -334,7 +349,7 @@ def is_duplicate(
     nickname_ratio=90,
     org_ratio=95,
 ):
-    """Strict prioritization requiring exact matches for similar names"""
+    """Check for duplicates based on matching name parts and phone numbers"""
     if not contact1 or not contact2:
         return False
 
@@ -345,31 +360,64 @@ def is_duplicate(
         if cache_key in comparison_cache:
             return comparison_cache[cache_key]
 
-    # Calculate name similarity first
-    name_similarity = (
-        fuzz.ratio(
-            get_contact_name(contact1).lower(), get_contact_name(contact2).lower()
-        )
-        / 100
+    # Get names and normalize them
+    name1 = get_contact_name(contact1).lower()
+    name2 = get_contact_name(contact2).lower()
+
+    # Remove common titles and honorifics
+    titles = {
+        "prof",
+        "dr",
+        "professor",
+        "mr",
+        "mrs",
+        "ms",
+        "phd",
+        "md",
+        "i",
+        "ii",
+        "iii",
+        "iv",
+        "v",
+    }
+    for title in titles:
+        name1 = re.sub(rf"\b{title}\b\.?\s*", "", name1)
+        name2 = re.sub(rf"\b{title}\b\.?\s*", "", name2)
+
+    # Split names into parts and remove empty/short parts
+    parts1 = [p for p in name1.split() if len(p) > 2]  # Ignore initials and short parts
+    parts2 = [p for p in name2.split() if len(p) > 2]
+
+    # Count matching parts
+    matching_parts = sum(
+        1
+        for p1 in parts1
+        for p2 in parts2
+        if p1 == p2 or string_similarity(p1, p2) > 0.8
     )
 
-    # 2. Exact name match case - always merge regardless of phone numbers
-    if name_similarity == 1.0:
-        result = True
+    # Calculate match ratio based on the number of matching parts
+    total_parts = max(len(parts1), len(parts2))
+    name_match_ratio = matching_parts / total_parts if total_parts > 0 else 0
 
-    # 3. Similar but not identical names - require exact phone match
-    elif name_similarity >= 0.7:  # Names are similar
-        phones1 = set(normalize_phone_list(contact1.get("Telephone", "")))
-        phones2 = set(normalize_phone_list(contact2.get("Telephone", "")))
-        result = bool(phones1 and phones2 and phones1.intersection(phones2))
+    # Check phone numbers
+    phones1 = set(normalize_phone_list(contact1.get("Telephone", "")))
+    phones2 = set(normalize_phone_list(contact2.get("Telephone", "")))
+    have_matching_phones = bool(phones1 and phones2 and phones1.intersection(phones2))
 
-    # 4. Different names - don't match unless very strong evidence
-    else:
-        result = False
+    # Consider it a match if:
+    # 1. Phone numbers match exactly AND at least 1/3 of name parts match
+    # 2. OR more than 2/3 of name parts match exactly
+    result = (
+        have_matching_phones and name_match_ratio >= 0.33
+    ) or name_match_ratio >= 0.67
 
     if comparison_cache is not None and cache_key is not None:
         comparison_cache[cache_key] = result
     return result
+
+
+# ...existing code...
 
 
 def is_duplicate_with_confidence(contact1, contact2, ratios=None):
@@ -525,7 +573,9 @@ def process_contact(contact, validation_mode=AddressValidationMode.FULL):
             if isinstance(contact.get("Email", []), list)
             else contact.get("Email", "")
         ),
-        "Telephone": contact.get("Telephone", []),  # Changed from "Phone" to "Telephone"
+        "Telephone": contact.get(
+            "Telephone", []
+        ),  # Changed from "Phone" to "Telephone"
         "Birthday": contact.get("Birthday", ""),
     }
 

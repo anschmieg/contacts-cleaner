@@ -5,3 +5,5 @@
 input/
 output/
 __pycache__/
+*.log
+**.log
