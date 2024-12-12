@@ -5,5 +5,7 @@
 input/
 output/
 __pycache__/
+v1/
 *.log
 **.log
+__address_validation.log
