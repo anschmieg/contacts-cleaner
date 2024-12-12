@@ -1,9 +1,19 @@
+# Environment files
 .env
 .env.local
 .env.*
+
+# macOS system files
 .DS_Store
+
+# Input and output directories
 input/
 output/
+
+# Python cache files
 __pycache__/
+
+# Log files
 *.log
-**.log
+**/*.log
+address_validation.log*
