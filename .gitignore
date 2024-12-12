@@ -7,8 +7,12 @@
 .DS_Store
 
 # Input and output directories
-input/
-output/
+input/**
+output/**
+
+# Old files
+v1/
+v1/**
 
 # Python cache files
 __pycache__/
